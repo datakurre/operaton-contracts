@@ -41,6 +41,7 @@ TaskTemplate(
     input_group="sisu",            # group id for inputs (default "inputs")
     output_group="sisu",           # group id for outputs (default "outputs")
     version=1,                     # bump when bindings change incompatibly
+    icon="sisu.svg",               # optional; replaces the configured icon
 )
 ```
 
@@ -65,15 +66,27 @@ groups, properties, icon`. Properties start with Hidden
 | `string` + `enum` (`Literal`) | `Dropdown` + `choices` |
 | `array` of `string` | `List` + `itemType: "String"` |
 | `array` of `string` + `items.enum` | `List` + `choices` + `display: "taglist"` |
+| `object` of `string` (`dict[str, str]`) | `Map` + `entries` (hint, `Literal`, or `Enum` keys), else `additionalEntries: true` |
 | anything else | error unless `template_hints(type=...)` |
 
 - `value`: `template_hints(value=...)` → schema `default` → `[]` for `List`
   → `"${alias}"`. The value must fit the type (`str` for String, Text,
   Hidden, Dropdown; `bool` for Boolean; `list` for List) or rendering fails.
-- `type` hints must be one of String, Text, Hidden, Dropdown, Boolean, List;
-  a Dropdown needs `Literal` choices.
-- `constraints.notEmpty`: `minLength ≥ 1`, `minItems ≥ 1`, or a required
-  `String` property.
+- `type` hints must be one of String, Text, Hidden, Dropdown, Boolean, List,
+  Map; a Dropdown needs `Literal` choices and a Map a `dict[str, str]` field.
+- A Map takes no `value` (use `default_factory=dict` or `= {}`);
+  `entries=[{"key": ..., "label": ..., "type": "Text", "value": ...}]` fixes
+  its keys, labels, and defaults. Hinted keys must fit `Literal`/`Enum` keys
+  and key patterns; entries are checked against the schema's entry rules.
+- Map `constraints` apply to every value: value `min_length ≥ 1` →
+  `notEmpty`, plus value `min_length`/`max_length`/`pattern`; a key pattern →
+  `keyPattern`. Required does not add `notEmpty`; set
+  `"constraints": {"notEmpty": true}` per entry instead.
+- `Literal` map values turn entries into Dropdowns and need fixed keys.
+- `group` hints move one input into another of the spec's `groups`.
+- `constraints.notEmpty` (non-Map): `minLength ≥ 1`, `minItems ≥ 1`, or a
+  required `String` property.
+- Hints on output fields are rejected.
 - `binding`: `{"type": "camunda:inputParameter", "name": alias}`.
 
 ## Output mapping
@@ -84,7 +97,8 @@ modeler user may rename the target process variable.
 
 ## Hints
 
-`template_hints(value=..., type=...)` only; unknown keys raise. Everything
+`template_hints(value=..., type=..., group=..., entries=...)` only; unknown
+keys raise. Everything
 else is derived, so prefer adjusting the model over adding hints.
 
 ## `check` enforces

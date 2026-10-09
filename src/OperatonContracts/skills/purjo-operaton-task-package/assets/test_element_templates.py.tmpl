@@ -17,7 +17,10 @@ class ElementTemplatePackageTests(unittest.TestCase):
     def test_committed_templates_match_contracts(self) -> None:
         config = load_config(ROOT)
         rendered = render_all(
-            config.specs, icon_svg=config.icon_svg, schema_url=config.schema_url
+            config.specs,
+            icon_svg=config.icon_svg,
+            schema_url=config.schema_url,
+            icons=config.icons,
         )
         self.assertEqual(drift(config.template_dir, rendered), [])
 

@@ -9,7 +9,7 @@ compatible bpmn.io modelers.
 ```toml title="pyproject.toml"
 [tool.operaton-contracts]
 specs = "OperatonTasks:TEMPLATES"                # module:attribute, required
-icon = "logo.svg"                               # SVG embedded in every template
+icon = "logo.svg"                               # SVG for specs without their own
 reserved-topics = ["legacy.topic"]              # topics owned by other workers
 schema-url = "https://…?job=release"            # pinned schema; has a default
 ```
@@ -45,6 +45,10 @@ Alternatively, keep the specs out of the runtime task module in a root-level
 `OperatonTemplates.py` and set `specs = "OperatonTemplates:TEMPLATES"`. If
 using `pur wrap`, list that module and the root-level icon in `.wrapignore`
 so they stay out of the robot package.
+
+A spec may set `icon="other.svg"` (relative to the project root) to embed its
+own SVG instead of the configured `icon`. Icons must be files inside the
+project root; list per-spec icons in `.wrapignore` as well.
 
 The default groups are `inputs` ("Inputs") and `outputs` ("Results").
 `input_group` and `output_group` must be ids from `groups`; use one id for
@@ -86,17 +90,46 @@ Properties start with Hidden `camunda:type = external` and
 | `string` with `enum` (`Literal`) | `Dropdown` with `choices` |
 | `array` of `string` | `List` with `itemType: "String"` |
 | `array` of `string` with `items.enum` | `List` with `choices` and `display: "taglist"` |
+| `object` of `string` (`dict[str, str]`) | `Map`; see below |
 | anything else | error, unless a `type` hint is given |
 
 - `value`: the `value` hint, the schema `default`, `[]` for `List`, or
   `"${alias}"`. The value must fit the property type.
 - `constraints.notEmpty`: `minLength ≥ 1`, `minItems ≥ 1`, or a required
   `String`.
+- `group`: the spec's `input_group`, or the `group` hint.
+
+### Map inputs
+
+A `dict[str, str]` input renders as a `Map`, bound as a
+`camunda:inputParameter` holding a `camunda:map`.
+
+- Fixed keys (`entries`): the `entries` hint, else the keys of
+  `dict[Literal[...], str]` (one or more) or of `dict[StrEnum, str]`.
+  Hinted keys must be among the contract's `Literal`/`Enum` keys and match a
+  key pattern. Without fixed keys the Map gets `additionalEntries: true`, so
+  modeler users add their own keys.
+- Map `constraints` apply to *every value*: value `min_length ≥ 1` gives
+  `notEmpty`, and value `min_length`, `max_length`, and `pattern` carry over.
+  A key pattern (`dict[Annotated[str, StringConstraints(pattern=...)], str]`)
+  becomes `keyPattern` for user-added keys. Other key constraints are
+  rejected. Being required does not add `notEmpty`; to require an entry's
+  value, put `"constraints": {"notEmpty": true}` in that entry.
+- `Literal` value choices (`dict[Literal["a"], Literal["x", "y"]]`) make each
+  entry a `Dropdown`; they need fixed keys.
+- A Map takes no value: use `default_factory=dict` or `= {}`, and pre-fill
+  entries with `value` in the `entries` hint.
+- Entries are checked against the element-template schema's entry rules:
+  non-empty unique keys, string values (boolean for `Boolean`), `choices`
+  only and always on `Dropdown`, `placeholder` only on `String`/`Text`, and
+  `constraints`/`optional` only on `String`/`Text`/`Dropdown`, never
+  `optional` with `notEmpty`.
 - `binding`: `camunda:inputParameter` named by the alias.
 
 ### Outputs
 
-A `String` property whose value is the alias, bound as a
+Template hints are not allowed on outputs. Each output is a `String`
+property whose value is the alias, bound as a
 `camunda:outputParameter` with `source = "${alias}"`. Modeler users may rename
 the target process variable.
 

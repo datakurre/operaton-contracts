@@ -1,5 +1,22 @@
 # Changelog
 
+## Unreleased
+
+- `dict[str, str]` inputs render as `Map` element-template properties. The
+  new `entries` hint fixes their keys (with labels, entry types, and
+  defaults) and is checked against the schema's entry rules; otherwise
+  `Literal` or string `Enum` keys become the entries, or modeler users may
+  add keys. Value length and pattern constraints become Map `constraints`,
+  key patterns become `keyPattern`, and `Literal` values become Dropdown
+  entries.
+- The new `group` hint places an input in another of the spec's groups.
+- `TaskTemplate.icon` embeds a per-template SVG instead of the configured
+  `icon`; `Config.icons` holds the loaded files and `render_all` accepts them
+  as `icons=`. Icons outside the project root are rejected.
+- Template hints on output fields are rejected.
+- `check` requires list (`@`) defaults for array inputs and dictionary (`&`)
+  defaults for object inputs, and suggests `&{EMPTY}`.
+
 ## 0.2.0
 
 - Bundle the `purjo-operaton-task-package` agent skill and add

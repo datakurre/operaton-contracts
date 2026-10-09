@@ -14,7 +14,7 @@ from pydantic import ConfigDict
 from pydantic import JsonValue
 
 TEMPLATE_KEY = "x-element-template"
-HINT_KEYS = frozenset({"type", "value"})
+HINT_KEYS = frozenset({"entries", "group", "type", "value"})
 
 
 class TaskContract(BaseModel):
@@ -38,8 +38,11 @@ def template_hints(**hints: JsonValue) -> dict[str, JsonValue]:
     """Return ``json_schema_extra`` with template-only property hints.
 
     ``value`` overrides the template default value; ``type`` overrides the
-    template property type inferred from the JSON Schema. Required string
-    properties and non-empty strings or lists get ``notEmpty``.
+    template property type inferred from the JSON Schema; ``group`` places the
+    property in another of the template's groups; ``entries`` lists the fixed
+    keys of a ``Map`` property as element-template entry objects (``key``
+    plus optional ``label``, ``type``, ``value``, …). Required string and map
+    properties and non-empty strings, lists, or maps get ``notEmpty``.
     """
     unknown = sorted(set(hints) - HINT_KEYS)
     if unknown:

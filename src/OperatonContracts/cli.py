@@ -11,7 +11,7 @@ Configured in the robot package's ``pyproject.toml``::
     [tool.operaton-contracts]
     specs = "OperatonTasks:TEMPLATES"                # co-located with task contracts
     # Or use "OperatonTemplates:TEMPLATES" for a separate build-time module.
-    icon = "logo.svg"                               # optional
+    icon = "logo.svg"                               # optional; a spec's icon wins
     schema-url = "https://…?job=release"            # optional, pinned default
     reserved-topics = ["legacy.topic"]              # optional
 """
@@ -25,6 +25,7 @@ import tomllib
 from collections.abc import Sequence
 from types import ModuleType
 from dataclasses import dataclass
+from dataclasses import field
 from pathlib import Path
 
 from OperatonContracts.checks import check_package
@@ -56,6 +57,7 @@ class Config:
     icon_svg: bytes
     schema_url: str
     reserved_topics: tuple[str, ...]
+    icons: dict[str, bytes] = field(default_factory=dict)
 
     @property
     def template_dir(self) -> Path:
@@ -78,6 +80,14 @@ def _import_specs(root: Path, module_name: str) -> ModuleType:
         raise ConfigError(
             f"Cannot import the specs module {module_name!r} from {root}: {error}"
         ) from error
+
+
+def _read_icon(root: Path, icon: object, label: str) -> bytes:
+    """Read an icon file that must lie inside the project ``root``."""
+    path = (root / icon).resolve() if isinstance(icon, str) else None
+    if path is None or not path.is_relative_to(root) or not path.is_file():
+        raise ConfigError(f"{label} {icon!r} is not a file in {root}")
+    return path.read_bytes()
 
 
 def load_config(root: Path) -> Config:
@@ -112,14 +122,19 @@ def load_config(root: Path) -> Config:
     if not isinstance(schema_url, str):
         raise ConfigError("schema-url must be a string")
     icon = table.get("icon")
-    if icon is not None and not (isinstance(icon, str) and (root / icon).is_file()):
-        raise ConfigError(f"icon {icon!r} is not a file in {root}")
+    if icon is not None:
+        icon_svg = _read_icon(root, icon, "icon")
+    icons: dict[str, bytes] = {}
+    for spec in specs:
+        if spec.icon is not None and spec.icon not in icons:
+            icons[spec.icon] = _read_icon(root, spec.icon, f"{spec.topic}: icon")
     return Config(
         root=root,
         specs=tuple(specs),
-        icon_svg=(root / icon).read_bytes() if icon else b"",
+        icon_svg=icon_svg if icon is not None else b"",
         schema_url=schema_url,
         reserved_topics=tuple(reserved),
+        icons=icons,
     )
 
 
@@ -186,7 +201,10 @@ def main(argv: Sequence[str] | None = None) -> int:
     try:
         config = load_config(arguments.root)
         rendered = render_all(
-            config.specs, icon_svg=config.icon_svg, schema_url=config.schema_url
+            config.specs,
+            icon_svg=config.icon_svg,
+            schema_url=config.schema_url,
+            icons=config.icons,
         )
     except (ConfigError, TemplateError) as error:
         print(error, file=sys.stderr)

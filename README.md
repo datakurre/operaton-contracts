@@ -55,8 +55,9 @@ class ProcessRecordsOutput(TaskContract):
 `TaskContract` is strict, forbids extra fields, and strips strings. Every
 field needs an `alias` (the process variable name) and a `title` (the
 template label). Use `Literal[...]` for choices; `Enum`, `Optional`, and nested
-models are not supported in template inputs. `template_hints(value=...,
-type=...)` sets template-only defaults and property types.
+models are not supported in template inputs; `dict[str, str]` renders as a
+`Map`. `template_hints(value=..., type=..., group=..., entries=...)` sets
+template-only defaults, property types, groups, and `Map` entries.
 
 ## Robot tasks
 

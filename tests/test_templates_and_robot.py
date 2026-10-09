@@ -13,12 +13,17 @@ from contextlib import redirect_stderr
 from contextlib import redirect_stdout
 from datetime import date
 from pathlib import Path
+from enum import Enum
+from typing import Annotated
 from typing import Any
 from typing import Literal
 from unittest.mock import patch
 
+from jsonschema import Draft7Validator
 from pydantic import Field
+from pydantic import StringConstraints
 from pydantic import ValidationError
+from pydantic import create_model
 
 import OperatonContracts
 from OperatonContracts import OperatonContracts as OperatonContractsLibrary
@@ -34,6 +39,10 @@ from OperatonContracts.templates import TemplateGroup
 from OperatonContracts.templates import render
 
 SCHEMA_URL = "https://example.invalid/schema.json"
+# A copy of the pinned upstream schema, so rendered templates validate offline.
+UPSTREAM_SCHEMA = (
+    Path(__file__).parent / "data" / "operaton-element-templates-schema-v0.8.3.json"
+)
 
 
 class DemoInput(TaskContract):
@@ -282,7 +291,57 @@ class ElementTemplateRenderTests(unittest.TestCase):
             value: str = Field(
                 alias="value",
                 title="Value",
+                json_schema_extra=template_hints(type="Bogus"),
+            )
+
+        class MapOfString(TaskContract):
+            value: str = Field(
+                alias="value",
+                title="Value",
                 json_schema_extra=template_hints(type="Map"),
+            )
+
+        class MapOfModel(TaskContract):
+            value: dict[str, int] = Field(
+                alias="value",
+                title="Value",
+                json_schema_extra=template_hints(type="Map"),
+            )
+
+        class MapWithValue(TaskContract):
+            value: dict[str, str] = Field(
+                alias="value",
+                title="Value",
+                json_schema_extra=template_hints(value="${value}"),
+            )
+
+        class MapWithDefault(TaskContract):
+            value: dict[str, str] = Field(
+                alias="value", title="Value", default={"a": "b"}
+            )
+
+        class EntriesOnString(TaskContract):
+            value: str = Field(
+                alias="value",
+                title="Value",
+                json_schema_extra=template_hints(entries=[{"key": "a"}]),
+            )
+
+        def entries(hint: Any) -> type[TaskContract]:
+            class BadEntries(TaskContract):
+                value: dict[str, str] = Field(
+                    alias="value",
+                    title="Value",
+                    json_schema_extra=template_hints(entries=hint),
+                )
+
+            return BadEntries
+
+        class UnknownGroup(TaskContract):
+            value: str = Field(
+                alias="value",
+                title="Value",
+                json_schema_extra=template_hints(group="missing"),
             )
 
         class DropdownWithoutChoices(TaskContract):
@@ -305,7 +364,20 @@ class ElementTemplateRenderTests(unittest.TestCase):
 
         for model, message in (
             (BadAlias, "plain identifier"),
-            (BogusType, "'Map' is not one of"),
+            (BogusType, "'Bogus' is not one of"),
+            (MapOfString, "a Map needs a dict"),
+            (MapOfModel, "a Map needs a dict"),
+            (MapWithValue, "a Map takes no value"),
+            (MapWithDefault, "a Map takes no value"),
+            (EntriesOnString, "entries need a Map"),
+            (entries([]), "non-empty list"),
+            (entries({"key": "a"}), "non-empty list"),
+            (entries(["a"]), "string key"),
+            (entries([{"label": "A"}]), "string key"),
+            (entries([{"key": "a", "bogus": 1}]), "unknown entry key"),
+            (entries([{"key": "a", "type": "List"}]), "entry type 'List'"),
+            (entries([{"key": "a"}, {"key": "a"}]), "must be unique"),
+            (UnknownGroup, "unknown group id 'missing'"),
             (DropdownWithoutChoices, "needs Literal choices"),
             (WrongValue, "does not fit template type String"),
             (Optional, "anyOf="),
@@ -314,6 +386,301 @@ class ElementTemplateRenderTests(unittest.TestCase):
             with self.subTest(model=model.__name__):
                 with self.assertRaisesRegex(TemplateError, message):
                     render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+
+    def test_render_maps_string_dicts_to_map_properties(self) -> None:
+        class MapInput(TaskContract):
+            open: dict[str, str] = Field(alias="open", title="Open")
+            fixed: dict[Literal["fi", "en"], str] = Field(
+                alias="fixed", title="Fixed", default_factory=dict
+            )
+            labeled: dict[str, str] = Field(
+                alias="labeled",
+                title="Labeled",
+                min_length=1,
+                default_factory=dict,
+                json_schema_extra=template_hints(
+                    group="extra",
+                    entries=[
+                        {"key": "fi", "label": "Suomeksi"},
+                        {"key": "en", "label": "In English", "type": "Text"},
+                    ],
+                ),
+            )
+            text: dict[str, str] = Field(
+                alias="text",
+                title="Text",
+                json_schema_extra=template_hints(type="String"),
+            )
+
+        spec = TaskTemplate(
+            **{
+                **DEMO.__dict__,
+                "inputs": MapInput,
+                "groups": (
+                    *operaton_templates.DEFAULT_GROUPS,
+                    TemplateGroup("extra", "Extra"),
+                ),
+            }
+        )
+        template = render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+        binding = {"type": "camunda:inputParameter"}
+        self.assertEqual(
+            _property(template, "open"),
+            {
+                "label": "Open",
+                "type": "Map",
+                "group": "inputs",
+                "binding": {**binding, "name": "open"},
+                "additionalEntries": True,
+            },
+        )
+        self.assertEqual(
+            _property(template, "fixed"),
+            {
+                "label": "Fixed",
+                "type": "Map",
+                "group": "inputs",
+                "binding": {**binding, "name": "fixed"},
+                "entries": [{"key": "fi"}, {"key": "en"}],
+            },
+        )
+        self.assertEqual(
+            _property(template, "labeled"),
+            {
+                "label": "Labeled",
+                "type": "Map",
+                "group": "extra",
+                "binding": {**binding, "name": "labeled"},
+                "entries": [
+                    {"key": "fi", "label": "Suomeksi"},
+                    {"key": "en", "label": "In English", "type": "Text"},
+                ],
+            },
+        )
+        self.assertEqual(_property(template, "text")["type"], "String")
+        self.assertEqual(_property(template, "text")["value"], "${text}")
+
+    def test_render_maps_key_and_value_schemas(self) -> None:
+        class Locale(str, Enum):
+            FI = "fi"
+            EN = "en"
+
+        class MapInput(TaskContract):
+            single: dict[Literal["fi"], str] = Field(alias="single", title="Single")
+            enum: dict[Locale, str] = Field(alias="enum", title="Enum")
+            pattern: dict[
+                Annotated[str, StringConstraints(pattern="^[a-z]{2}$")], str
+            ] = Field(alias="pattern", title="Pattern", default={})
+            names: dict[
+                Annotated[str, StringConstraints(pattern="^x")],
+                Annotated[str, StringConstraints(min_length=2, max_length=9)],
+            ] = Field(alias="names", title="Names")
+            values: dict[str, Annotated[str, StringConstraints(pattern="^v")]] = Field(
+                alias="values", title="Values"
+            )
+            choice: dict[Literal["a", "b"], Literal["x", "y"]] = Field(
+                alias="choice",
+                title="Choice",
+                json_schema_extra=template_hints(entries=[{"key": "a", "label": "A"}]),
+            )
+            nonempty: dict[str, Annotated[str, StringConstraints(min_length=1)]] = (
+                Field(
+                    alias="nonempty",
+                    title="Non-empty",
+                    json_schema_extra=template_hints(
+                        entries=[
+                            {"key": "fi", "optional": True, "constraints": {}},
+                            {"key": "on", "type": "Boolean", "value": True},
+                            {
+                                "key": "pick",
+                                "type": "Dropdown",
+                                "choices": [{"name": "A", "value": "a"}],
+                            },
+                        ]
+                    ),
+                )
+            )
+
+        spec = TaskTemplate(**{**DEMO.__dict__, "inputs": MapInput})
+        template = render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+        maps = {
+            prop["binding"]["name"]: {
+                key: prop[key]
+                for key in ("constraints", "entries", "additionalEntries")
+                if key in prop
+            }
+            for prop in template["properties"]
+            if prop["type"] == "Map"
+        }
+        self.assertEqual(
+            maps,
+            {
+                "single": {"entries": [{"key": "fi"}]},
+                "enum": {"entries": [{"key": "fi"}, {"key": "en"}]},
+                "pattern": {
+                    "constraints": {"keyPattern": "^[a-z]{2}$"},
+                    "additionalEntries": True,
+                },
+                "names": {
+                    "constraints": {
+                        "notEmpty": True,
+                        "minLength": 2,
+                        "maxLength": 9,
+                        "keyPattern": "^x",
+                    },
+                    "additionalEntries": True,
+                },
+                "values": {
+                    "constraints": {"pattern": "^v"},
+                    "additionalEntries": True,
+                },
+                "choice": {
+                    "entries": [
+                        {
+                            "key": "a",
+                            "label": "A",
+                            "type": "Dropdown",
+                            "choices": [
+                                {"name": "x", "value": "x"},
+                                {"name": "y", "value": "y"},
+                            ],
+                        }
+                    ]
+                },
+                "nonempty": {
+                    "constraints": {"notEmpty": True},
+                    "entries": [
+                        {"key": "fi", "optional": True, "constraints": {}},
+                        {"key": "on", "type": "Boolean", "value": True},
+                        {
+                            "key": "pick",
+                            "type": "Dropdown",
+                            "choices": [{"name": "A", "value": "a"}],
+                        },
+                    ],
+                },
+            },
+        )
+        validator = Draft7Validator(json.loads(UPSTREAM_SCHEMA.read_text()))
+        self.assertEqual(
+            [error.message for error in validator.iter_errors(template)], []
+        )
+
+    def test_render_rejects_map_shapes_and_entries_the_schema_rejects(self) -> None:
+        def contract(annotation: Any, **hints: Any) -> type[TaskContract]:
+            return create_model(
+                "MapContract",
+                __base__=TaskContract,
+                value=(
+                    annotation,
+                    Field(
+                        alias="value",
+                        title="Value",
+                        json_schema_extra=template_hints(**hints),
+                    ),
+                ),
+            )
+
+        def entry(**fields: Any) -> type[TaskContract]:
+            return contract(dict[str, str], entries=[{"key": "a", **fields}])
+
+        for model, message in (
+            (contract(dict[str, str], value="x"), "a Map takes no value"),
+            (contract(dict[Literal["a"], str], entries=[{"key": "b"}]), "not one of"),
+            (
+                contract(
+                    dict[Annotated[str, StringConstraints(pattern="^a")], str],
+                    entries=[{"key": "b"}],
+                ),
+                "does not match '\\^a'",
+            ),
+            (
+                contract(dict[Annotated[str, StringConstraints(min_length=2)], str]),
+                "unsupported map key schema",
+            ),
+            (contract(dict[str, Literal["x", "y"]]), "need fixed keys"),
+            (
+                contract(
+                    dict[str, Literal["x"]], entries=[{"key": "a", "type": "Text"}]
+                ),
+                "must be a Dropdown",
+            ),
+            (entry(key=""), "must not be empty"),
+            (entry(value=5), "must be a str"),
+            (entry(type="Boolean", value="true"), "must be a bool"),
+            (entry(type="Dropdown"), "needs choices"),
+            (entry(choices=[{"name": "a", "value": "a"}]), "cannot have choices"),
+            (entry(type="Hidden", placeholder="x"), "cannot have placeholder"),
+            (entry(type="Boolean", constraints={}), "cannot have constraints"),
+            (entry(label=1), "label of entry 'a' must be a string"),
+            (entry(editable="no"), "editable of entry 'a' must be a boolean"),
+            (entry(type="Dropdown", choices=[]), "non-empty list"),
+            (entry(type="Dropdown", choices=[{"name": "a"}]), "non-empty list"),
+            (entry(type="Dropdown", choices=[{"name": "a", "value": 1}]), "name/value"),
+            (entry(constraints={"bogus": 1}), "may only set"),
+            (entry(constraints=[]), "may only set"),
+            (
+                entry(optional=True, constraints={"notEmpty": True}),
+                "both optional and notEmpty",
+            ),
+        ):
+            spec = TaskTemplate(**{**DEMO.__dict__, "inputs": model})
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(TemplateError, message):
+                    render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+
+    def test_render_rejects_template_hints_on_outputs(self) -> None:
+        class HintedOutput(TaskContract):
+            value: str = Field(
+                alias="value",
+                title="Value",
+                json_schema_extra=template_hints(group="outputs"),
+            )
+
+        spec = TaskTemplate(**{**DEMO.__dict__, "outputs": HintedOutput})
+        with self.assertRaisesRegex(TemplateError, "apply only to inputs"):
+            render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+
+    def test_map_schemas_need_one_string_value_schema(self) -> None:
+        for schema in (
+            {"type": "object", "patternProperties": {"^a": {}, "^b": {}}},
+            {
+                "type": "object",
+                "patternProperties": {"^a": {"type": "string"}},
+                "additionalProperties": {"type": "string"},
+            },
+            {"type": "object", "additionalProperties": {"type": "integer"}},
+            {"type": "object", "additionalProperties": True},
+        ):
+            with self.subTest(schema=schema):
+                self.assertIsNone(operaton_templates._map_schemas(schema))
+
+    def test_unresolvable_map_refs_are_kept(self) -> None:
+        schema = {"propertyNames": {"$ref": "#/$defs/Missing"}}
+        self.assertEqual(operaton_templates._inline_map_refs(schema, {}), schema)
+
+    def test_spec_icons_replace_the_configured_icon(self) -> None:
+        spec = TaskTemplate(**{**DEMO.__dict__, "icon": "own.svg"})
+        other = TaskTemplate(**{**DEMO.__dict__, "filename": "other.json"})
+        rendered = operaton_templates.render_all(
+            (spec, other),
+            icon_svg=b"<default/>",
+            schema_url=SCHEMA_URL,
+            icons={"own.svg": b"<own/>"},
+        )
+        icons = {
+            filename: json.loads(text)["icon"]["contents"]
+            for filename, text in rendered.items()
+        }
+        self.assertEqual(
+            icons,
+            {
+                "demo-greet.json": "data:image/svg+xml;base64,PG93bi8+",
+                "other.json": "data:image/svg+xml;base64,PGRlZmF1bHQvPg==",
+            },
+        )
+        with self.assertRaisesRegex(TemplateError, "icon 'own.svg' is not loaded"):
+            operaton_templates.render_all((spec,), icon_svg=b"", schema_url=SCHEMA_URL)
 
     def test_template_hints_reject_unknown_keys(self) -> None:
         with self.assertRaisesRegex(ValueError, "label"):
@@ -454,9 +821,23 @@ class PackageCheckTests(unittest.TestCase):
                 check_package(package.root, [DEMO]),
                 [
                     "greet.robot: default of ${count} is a string; use a typed "
-                    "default such as ${False}, ${0}, or @{EMPTY}",
+                    "default such as ${False}, ${0}, @{EMPTY}, or &{EMPTY}",
                     "greet.robot: default of ${dryRun} is a string; use a typed "
-                    "default such as ${False}, ${0}, or @{EMPTY}",
+                    "default such as ${False}, ${0}, @{EMPTY}, or &{EMPTY}",
+                ],
+            )
+
+    def test_check_requires_list_and_dictionary_defaults_to_match(self) -> None:
+        suite = DEMO_SUITE.replace("@{tags}    @{EMPTY}", "&{tags}    &{EMPTY}")
+        suite = suite.replace("${note}    ${EMPTY}", "${note}    @{EMPTY}")
+        with DemoPackage(suite=suite) as package:
+            self.assertEqual(
+                check_package(package.root, [DEMO]),
+                [
+                    "greet.robot: default of &{tags} is a dictionary, but input "
+                    "'tags' is array",
+                    "greet.robot: default of ${note} is a list, but input 'note' "
+                    "is string",
                 ],
             )
 
@@ -471,7 +852,8 @@ class PackageCheckTests(unittest.TestCase):
                         check_package(package.root, [DEMO]),
                         [
                             f"greet.robot: default of ${{dryRun}} is a string; use "
-                            "a typed default such as ${False}, ${0}, or @{EMPTY}"
+                            "a typed default such as ${False}, ${0}, @{EMPTY}, "
+                            "or &{EMPTY}"
                         ],
                     )
 
@@ -691,11 +1073,21 @@ class CommandLineTests(unittest.TestCase):
             ('specs = "cfg_specs"\nreserved-topics = [1]', "reserved-topics"),
             ('specs = "cfg_specs"\nschema-url = 1', "schema-url"),
             ('specs = "cfg_specs"\nicon = "missing.svg"', "icon 'missing.svg'"),
+            ('specs = "cfg_specs:MISSING_ICON"', "demo.greet: icon 'gone.svg'"),
+            ('specs = "cfg_specs:INT_ICON"', "demo.greet: icon 1 is not a file"),
+            ('specs = "cfg_specs"\nicon = "../outside.svg"', "icon '../outside.svg'"),
+            ('specs = "cfg_specs"\nicon = 1', "icon 1 is not a file"),
         )
         with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
+            root = Path(directory) / "package"
+            root.mkdir()
+            # An existing file outside the root must still be refused.
+            (root.parent / "outside.svg").write_bytes(b"<svg/>")
             (root / "cfg_specs.py").write_text(
-                f"from {__name__} import DEMO\n\nTEMPLATES = (DEMO,)\nEMPTY = ()\n"
+                f"from dataclasses import replace\nfrom {__name__} import DEMO\n\n"
+                "TEMPLATES = (DEMO,)\nEMPTY = ()\n"
+                "MISSING_ICON = (replace(DEMO, icon='gone.svg'),)\n"
+                "INT_ICON = (replace(DEMO, icon=1),)\n"
             )
             for table, message in cases:
                 with self.subTest(table=table):
@@ -748,6 +1140,27 @@ class CommandLineTests(unittest.TestCase):
         self.assertEqual(config.icon_svg, b"")
         self.assertEqual(config.schema_url, operaton_templates.DEFAULT_SCHEMA_URL)
         self.assertEqual(config.reserved_topics, ())
+        self.assertEqual(config.icons, {})
+
+    def test_spec_icons_are_loaded_once_from_the_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "own.svg").write_bytes(b"<own/>")
+            (root / "icon_specs.py").write_text(
+                f"from dataclasses import replace\nfrom {__name__} import DEMO\n\n"
+                "TEMPLATES = (\n"
+                "    replace(DEMO, icon='own.svg'),\n"
+                "    replace(DEMO, topic='b', filename='b.json', icon='own.svg'),\n"
+                ")\n"
+            )
+            (root / "pyproject.toml").write_text(
+                '[tool.operaton-contracts]\nspecs = "icon_specs"\n'
+            )
+            try:
+                config = cli.load_config(root)
+            finally:
+                sys.modules.pop("icon_specs", None)
+        self.assertEqual(config.icons, {"own.svg": b"<own/>"})
 
     def test_module_entry_point(self) -> None:
         with DemoPackage() as package, redirect_stdout(io.StringIO()) as stdout:

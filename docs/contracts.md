@@ -83,12 +83,22 @@ template-only information. Unknown keys raise `ValueError`.
 | Hint | Effect |
 |---|---|
 | `value` | The template's pre-filled value, e.g. `["${recordId}"]` or a default selection |
-| `type` | Override the template property type: `String`, `Text`, `Hidden`, `Dropdown`, `Boolean`, or `List` |
+| `type` | Override the template property type: `String`, `Text`, `Hidden`, `Dropdown`, `Boolean`, `List`, or `Map` |
+| `group` | Show the property in another of the spec's `groups` instead of `input_group` |
+| `entries` | Fixed keys of a `Map` (`dict[str, str]`) input as element-template entries, e.g. `[{"key": "fi", "label": "Suomeksi", "type": "Text"}]` |
 
 Without a `value` hint the template uses the schema `default`, then `[]` for
 lists, then `"${alias}"`. Note that `default_factory` does not appear in the
 JSON Schema, so lists with `default_factory=list` need a `value` hint to
 pre-fill anything.
+
+A `dict[str, str]` input renders as a `Map`. Without an `entries` hint, the
+keys of `dict[Literal["fi", "en"], str]` (or of a string `Enum`) become its
+entries; any other string map lets modeler users add their own keys
+(`additionalEntries`). A Map takes no value: use `default_factory=dict` or
+`= {}`. See [Map inputs](templates.md#map-inputs) for constraints.
+
+Hints apply only to input contracts; output fields with hints are rejected.
 
 ## Values from Operaton
 

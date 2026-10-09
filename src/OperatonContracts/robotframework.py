@@ -112,6 +112,19 @@ def _variable_name(token: str) -> str:
 _UNTYPED_VALUES = frozenset({"${EMPTY}", "${SPACE}", "${None}", "${NONE}"})
 
 
+# Default sigils and the JSON Schema types whose values they produce.
+_SIGIL_TYPES = {"@": "array", "&": "object"}
+
+
+def _sigil(declared: str, values: tuple[str, ...]) -> str:
+    """Return ``@`` or ``&`` for list or dict defaults, else an empty string."""
+    if declared[0] in _SIGIL_TYPES:
+        return declared[0]
+    if len(values) == 1 and values[0][:2] in ("@{", "&{"):
+        return values[0][0]
+    return ""
+
+
 def _is_typed(declared: str, values: tuple[str, ...]) -> bool:
     """Whether a suite default yields a non-string value at runtime."""
     if declared[0] in "@&" or ":" in declared[2:-1]:
@@ -221,7 +234,16 @@ class RobotSuites:
             elif schema.get("type", "string") != "string" and not _is_typed(*declared):
                 errors.append(
                     f"{suite.path.name}: default of {declared[0]} is a string; "
-                    f"use a typed default such as ${{False}}, ${{0}}, or @{{EMPTY}}"
+                    f"use a typed default such as ${{False}}, ${{0}}, @{{EMPTY}}, "
+                    "or &{EMPTY}"
+                )
+            elif (sigil := _sigil(*declared)) and _SIGIL_TYPES[sigil] != schema.get(
+                "type"
+            ):
+                errors.append(
+                    f"{suite.path.name}: default of {declared[0]} is "
+                    f"{'a list' if sigil == '@' else 'a dictionary'}, but input "
+                    f"{alias!r} is {schema.get('type', 'not a JSON array or object')}"
                 )
         for alias, _schema, _required in contract_properties(spec.outputs):
             if normalize(alias) not in suite.task_outputs[key]:
