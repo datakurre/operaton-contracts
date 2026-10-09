@@ -1,0 +1,14 @@
+.venv/
+.devenv/
+dist/
+build/
+__pycache__/
+.coverage*
+htmlcov/
+.mypy_cache/
+.pytest_cache/
+output.xml
+log.html
+report.html
+.devenv*
+site/

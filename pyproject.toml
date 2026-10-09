@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "operaton-contracts"
+version = "0.1.0"
+description = "Pydantic task contracts, runtime validation, and generated element templates for Operaton external tasks, with optional Robot Framework support"
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+requires-python = ">=3.12"
+dependencies = [
+    "pydantic>=2.7",
+]
+keywords = ["operaton", "camunda", "bpmn", "robotframework", "purjo", "element-templates"]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Framework :: Robot Framework",
+    "Framework :: Robot Framework :: Library",
+    "Framework :: Pydantic :: 2",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Typing :: Typed",
+]
+
+[project.urls]
+Homepage = "https://datakurre.github.io/operaton-contracts/"
+Documentation = "https://datakurre.github.io/operaton-contracts/"
+Repository = "https://github.com/datakurre/operaton-contracts"
+Issues = "https://github.com/datakurre/operaton-contracts/issues"
+Changelog = "https://github.com/datakurre/operaton-contracts/blob/main/CHANGELOG.md"
+
+[project.optional-dependencies]
+robot = ["robotframework>=7.3"]
+templates = ["jsonschema>=4"]
+
+[project.scripts]
+operaton-contracts = "OperatonContracts.cli:main"
+
+[dependency-groups]
+test = [
+    "pytest",
+]
+dev = [
+    "black",
+    "jsonschema>=4",
+    "mypy",
+    "pytest",
+    "pytest-cov",
+    "robotframework>=7.3",
+    "types-jsonschema",
+]
+docs = [
+    "mkdocs>=1.6,<2",
+    "mkdocs-material",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/OperatonContracts"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "--cov=OperatonContracts --cov-branch --cov-report=term-missing --cov-fail-under=100"
+
+[tool.mypy]
+strict = true
+mypy_path = "src"
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "README.md", "CHANGELOG.md", "LICENSE"]

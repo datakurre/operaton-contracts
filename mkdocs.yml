@@ -1,0 +1,44 @@
+site_name: operaton-contracts
+site_description: Pydantic task contracts, runtime input validation, and generated element templates for Robot Framework packages served as Operaton external tasks
+site_url: https://datakurre.github.io/operaton-contracts/
+repo_url: https://github.com/datakurre/operaton-contracts
+repo_name: datakurre/operaton-contracts
+edit_uri: edit/main/docs/
+copyright: Apache License 2.0
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+    - navigation.top
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+nav:
+  - Overview: index.md
+  - Task contracts: contracts.md
+  - Robot tasks: robot.md
+  - Element templates: templates.md
+  - Changelog: changelog.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.superfences
+  - pymdownx.snippets:
+      check_paths: true
