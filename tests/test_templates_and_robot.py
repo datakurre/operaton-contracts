@@ -36,6 +36,7 @@ from OperatonContracts import cli
 from OperatonContracts import robotframework
 from OperatonContracts.checks import check_package
 from OperatonContracts import templates as operaton_templates
+from OperatonContracts.templates import ElementType
 from OperatonContracts.templates import TaskTemplate
 from OperatonContracts.templates import TemplateError
 from OperatonContracts.templates import TemplateGroup
@@ -268,6 +269,61 @@ class ElementTemplateRenderTests(unittest.TestCase):
             )
             with self.assertRaisesRegex(TemplateError, message):
                 render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+
+    def test_element_types_set_applies_to_and_event_definitions(self) -> None:
+        class NoOutput(TaskContract):
+            pass
+
+        validator = Draft7Validator(json.loads(UPSTREAM_SCHEMA.read_text()))
+        message = "bpmn:MessageEventDefinition"
+        expected: dict[ElementType, dict[str, Any]] = {
+            ElementType.SERVICE_TASK: {"appliesTo": ["bpmn:ServiceTask"]},
+            ElementType.SEND_TASK: {"appliesTo": ["bpmn:SendTask"]},
+            ElementType.BUSINESS_RULE_TASK: {"appliesTo": ["bpmn:BusinessRuleTask"]},
+            ElementType.MESSAGE_INTERMEDIATE_THROW_EVENT: {
+                "appliesTo": ["bpmn:IntermediateThrowEvent"],
+                "elementType": {
+                    "value": "bpmn:IntermediateThrowEvent",
+                    "eventDefinition": message,
+                },
+            },
+            ElementType.MESSAGE_END_EVENT: {
+                "appliesTo": ["bpmn:EndEvent"],
+                "elementType": {"value": "bpmn:EndEvent", "eventDefinition": message},
+            },
+        }
+        self.assertEqual(set(expected), set(ElementType))
+        for element_type, fields in expected.items():
+            outputs = (
+                NoOutput if element_type.name == "MESSAGE_END_EVENT" else DemoOutput
+            )
+            spec = replace(DEMO, element_type=element_type, outputs=outputs)
+            template = render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+            with self.subTest(element_type=element_type.name):
+                self.assertEqual({key: template[key] for key in fields}, fields)
+                self.assertEqual("elementType" in template, "elementType" in fields)
+                # The forked modeler moves these bindings onto the event
+                # definition named in elementType.
+                self.assertEqual(
+                    [prop["binding"]["name"] for prop in template["properties"][:2]],
+                    ["camunda:type", "camunda:topic"],
+                )
+                self.assertEqual(
+                    [error.message for error in validator.iter_errors(template)], []
+                )
+        self.assertEqual(DEMO.element_type, ElementType.SERVICE_TASK)
+
+        end_with_outputs = replace(DEMO, element_type=ElementType.MESSAGE_END_EVENT)
+        with self.assertRaisesRegex(
+            TemplateError, "message end event cannot map outputs"
+        ):
+            render(end_with_outputs, icon_svg=b"", schema_url=SCHEMA_URL)
+
+        bad = replace(DEMO, element_type=cast(Any, "bpmn:ServiceTask"))
+        with self.assertRaisesRegex(
+            TemplateError, "element_type must be an ElementType"
+        ):
+            render(bad, icon_svg=b"", schema_url=SCHEMA_URL)
 
     def test_group_ids_must_be_declared(self) -> None:
         spec = TaskTemplate(**{**DEMO.__dict__, "output_group": "missing"})

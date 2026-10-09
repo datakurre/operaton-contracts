@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.0
+
+- `TaskTemplate.element_type` selects the BPMN element a template applies
+  to: every element C7/Operaton can run as an external task with a topic
+  (`ElementType.SERVICE_TASK`, the default, `SEND_TASK`,
+  `BUSINESS_RULE_TASK`, `MESSAGE_INTERMEDIATE_THROW_EVENT`, and
+  `MESSAGE_END_EVENT`). Message events also render `elementType` with a
+  `bpmn:MessageEventDefinition` (applied by the forked modeler).
+  `MESSAGE_END_EVENT` rejects contracts with outputs, which Operaton does not
+  allow on end events. Service-task templates are unchanged.
+
 ## 0.3.0
 
 Breaking: existing projects may need changes before `generate` or `check`

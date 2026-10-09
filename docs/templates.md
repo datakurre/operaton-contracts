@@ -22,7 +22,7 @@ the contract models. This adds no package dependency. The `templates` extra is n
 `devenv.nix` and keep it out of uv's `dev` group.
 
 ```python title="OperatonTasks.py"
-from OperatonContracts.templates import TaskTemplate, TemplateGroup
+from OperatonContracts.templates import ElementType, TaskTemplate, TemplateGroup
 
 TEMPLATES = (
     TaskTemplate(
@@ -38,6 +38,7 @@ TEMPLATES = (
         output_group="main",
         version=1,  # bump when a published template changes
         keep_versions=(),  # earlier published versions; see Versions
+        element_type=ElementType.SERVICE_TASK,  # see Element types
     ),
 )
 ```
@@ -112,11 +113,33 @@ TaskTemplate(..., version=4, keep_versions=(2, 3))
 - Kept versions are copied as they were, so they may differ in anything,
   including `appliesTo`.
 
+## Element types
+
+C7/Operaton implements these BPMN elements as external tasks with a topic,
+and `element_type` (from `OperatonContracts.templates`) picks one per
+template:
+
+| `ElementType` | `appliesTo` | `elementType` |
+|---|---|---|
+| `SERVICE_TASK` (default) | `bpmn:ServiceTask` | — |
+| `SEND_TASK` | `bpmn:SendTask` | — |
+| `BUSINESS_RULE_TASK` | `bpmn:BusinessRuleTask` | — |
+| `MESSAGE_INTERMEDIATE_THROW_EVENT` | `bpmn:IntermediateThrowEvent` | `eventDefinition: bpmn:MessageEventDefinition` |
+| `MESSAGE_END_EVENT` | `bpmn:EndEvent` | `eventDefinition: bpmn:MessageEventDefinition` |
+
+For message events, `camunda:type` and `camunda:topic` live on the
+`messageEventDefinition`, and `elementType` makes the modeler add that
+definition when the template is applied. This needs the vasara-bpm forked
+modeler; upstream C7 element templates ignore `eventDefinition`. Operaton
+rejects output mappings on end events, so `MESSAGE_END_EVENT` needs an
+outputs contract without fields. Changing `element_type` changes the
+template's bindings, so bump `version` once the template is published.
+
 ## Generated structure
 
 Each template has `$schema`, `name`, `id`, `description`, `version`,
-`appliesTo: ["bpmn:ServiceTask"]`, `groups`, `properties`, and the icon.
-Properties start with Hidden `camunda:type = external` and
+`appliesTo` (and `elementType` for message events), `groups`, `properties`,
+and the icon. Properties start with Hidden `camunda:type = external` and
 `camunda:topic = <topic>`.
 
 ### Inputs

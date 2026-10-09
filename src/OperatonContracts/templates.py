@@ -14,8 +14,10 @@ from collections.abc import Iterable
 from collections.abc import Mapping
 from collections.abc import Sequence
 from dataclasses import dataclass
+from enum import Enum
 from pathlib import Path
 from typing import Any
+from typing import NamedTuple
 from urllib.request import urlopen
 
 from OperatonContracts.contracts import TEMPLATE_KEY
@@ -91,6 +93,40 @@ DEFAULT_GROUPS = (
 )
 
 
+class BpmnElement(NamedTuple):
+    """A BPMN type and, for events, the event definition it needs."""
+
+    type: str
+    event_definition: str | None = None
+
+
+class ElementType(Enum):
+    """BPMN elements that C7/Operaton can implement as an external task.
+
+    For message events, the forked modeler adds the event definition named in
+    ``elementType`` and binds ``camunda:type`` and ``camunda:topic`` to it.
+    """
+
+    SERVICE_TASK = BpmnElement("bpmn:ServiceTask")
+    SEND_TASK = BpmnElement("bpmn:SendTask")
+    BUSINESS_RULE_TASK = BpmnElement("bpmn:BusinessRuleTask")
+    MESSAGE_INTERMEDIATE_THROW_EVENT = BpmnElement(
+        "bpmn:IntermediateThrowEvent", "bpmn:MessageEventDefinition"
+    )
+    MESSAGE_END_EVENT = BpmnElement("bpmn:EndEvent", "bpmn:MessageEventDefinition")
+
+    def template_fields(self) -> dict[str, Any]:
+        """Return ``appliesTo`` and, for message events, ``elementType``."""
+        element: BpmnElement = self.value
+        fields: dict[str, Any] = {"appliesTo": [element.type]}
+        if element.event_definition is not None:
+            fields["elementType"] = {
+                "value": element.type,
+                "eventDefinition": element.event_definition,
+            }
+        return fields
+
+
 @dataclass(frozen=True)
 class TaskTemplate:
     """Template-level metadata for one external task topic.
@@ -101,6 +137,7 @@ class TaskTemplate:
     ``icon`` for this template. ``keep_versions`` lists earlier published
     versions that ``generate`` copies unchanged from the existing template
     file, so the modeler can still resolve and upgrade diagrams using them.
+    ``element_type`` is the BPMN element the template applies to.
     """
 
     topic: str
@@ -116,6 +153,7 @@ class TaskTemplate:
     version: int = 1
     icon: str | None = None
     keep_versions: tuple[int, ...] = ()
+    element_type: ElementType = ElementType.SERVICE_TASK
 
 
 def contract_properties(
@@ -488,6 +526,11 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
     """Render one element template from its spec and contract models."""
     if not _is_version(spec.version):
         raise TemplateError(f"{spec.topic}: version must be an integer of at least 1")
+    if not isinstance(spec.element_type, ElementType):
+        raise TemplateError(
+            f"{spec.topic}: element_type must be an ElementType, e.g. "
+            "ElementType.MESSAGE_INTERMEDIATE_THROW_EVENT"
+        )
     group_ids = [group.id for group in spec.groups]
     for group_id in (spec.input_group, spec.output_group):
         if group_id not in group_ids:
@@ -514,6 +557,12 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
         _output_property(alias, schema, spec.output_group, group_ids)
         for alias, schema, _required in contract_properties(spec.outputs)
     ]
+    if outputs and spec.element_type is ElementType.MESSAGE_END_EVENT:
+        # The engine rejects camunda:outputParameter on end events.
+        raise TemplateError(
+            f"{spec.topic}: a message end event cannot map outputs; use an "
+            "outputs contract without fields or another element_type"
+        )
     targets = [output["value"] for output in outputs if output["value"]]
     repeated = sorted({target for target in targets if targets.count(target) > 1})
     if repeated:
@@ -529,7 +578,7 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
         "id": spec.template_id,
         "description": spec.description,
         "version": spec.version,
-        "appliesTo": ["bpmn:ServiceTask"],
+        **spec.element_type.template_fields(),
         "groups": [{"id": group.id, "label": group.label} for group in spec.groups],
         "properties": properties,
         "icon": {"contents": f"data:image/svg+xml;base64,{icon}"},

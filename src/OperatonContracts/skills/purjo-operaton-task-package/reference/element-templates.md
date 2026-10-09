@@ -29,6 +29,8 @@ module imports the contract classes from `OperatonTasks.py` instead.
 ## Spec
 
 ```python
+from OperatonContracts.templates import ElementType, TaskTemplate, TemplateGroup
+
 TaskTemplate(
     topic="sisu.generic.study_rights.rescind",
     template_id="fi.sisu.purjo.study-rights-rescind",   # stable; never reuse
@@ -43,6 +45,8 @@ TaskTemplate(
     version=1,                     # bump when a published template changes
     icon="sisu.svg",               # optional; replaces the configured icon
     keep_versions=(),              # earlier published versions kept in the file
+    element_type=ElementType.SERVICE_TASK,  # or SEND_TASK, BUSINESS_RULE_TASK,
+                                   # MESSAGE_INTERMEDIATE_THROW_EVENT, MESSAGE_END_EVENT
 )
 ```
 
@@ -61,9 +65,15 @@ set `schema-url` when the package must pin a different schema version.
 
 ## Generated structure
 
-`$schema, name, id, description, version, appliesTo: ["bpmn:ServiceTask"],
-groups, properties, icon`. Properties start with Hidden
-`camunda:type = external` and `camunda:topic = <topic>`.
+`$schema, name, id, description, version, appliesTo, [elementType,]
+groups, properties, icon`. `appliesTo` is the `element_type`'s BPMN type;
+message events (`MESSAGE_INTERMEDIATE_THROW_EVENT`, `MESSAGE_END_EVENT`) add
+`elementType: {value, eventDefinition: "bpmn:MessageEventDefinition"}`, and
+their `camunda:type`/`camunda:topic` land on the message event definition.
+`MESSAGE_END_EVENT` needs an outputs contract without fields: the engine
+rejects output mappings on end events.
+Properties start with Hidden `camunda:type = external` and
+`camunda:topic = <topic>`.
 
 ## Input mapping (`model_json_schema(by_alias=True)`)
 
