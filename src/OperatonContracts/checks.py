@@ -66,7 +66,8 @@ def check_package(
     )
     spec_topics = {spec.topic for spec in specs}
     errors.extend(
-        f"Topic has no template spec: {topic}"
+        f"Topic has no template spec: {topic} (add a TaskTemplate for it, "
+        "or serve it from another package)"
         for topic in sorted(set(topics) - spec_topics)
     )
 
@@ -75,7 +76,10 @@ def check_package(
     for spec in specs:
         config = topics.get(spec.topic)
         if config is None:
-            errors.append(f"Topic missing from [tool.purjo.topics]: {spec.topic}")
+            errors.append(
+                f"Topic missing from [tool.purjo.topics]: {spec.topic} "
+                f'(add [tool.purjo.topics."{spec.topic}"] with the Robot task name)'
+            )
             continue
         if config.get("process-variables") is not False:
             errors.append(f"{spec.topic}: set process-variables = false")

@@ -12,6 +12,7 @@ ${{{package}}_api_secret}    Secret:
 
 *** Tasks ***
 {{Task Name}}
+    VAR    ${{{outputAlias}}}=    ${None}    scope=${BPMN:TASK}
     ${input}=    Validate Task Input    {{TaskName}}Input
     ${rows}=    {{Fetch Keyword}}
     ...    ${{{package}}_api_endpoint}

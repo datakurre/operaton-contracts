@@ -47,12 +47,13 @@ Every topic is the same chain. Each link is checked by
         ▲ imports
 OperatonTasks.py    task contracts: one Input/Output model per topic   ← source of truth
         │ generates (with a TaskTemplate spec)   │ validates at runtime
-element template (modeler)        Robot task: Validate Task Input → keywords → API
+element template (modeler)        Robot task: outputs = ${None} → Validate Task Input → keywords → API
 ```
 
 The pyproject topic `name` selects the Robot task; the task declares a default
-for every contract input, calls `Validate Task Input    <Contract>`, and sets
-every contract output with `VAR … scope=${BPMN:TASK}`.
+for every contract input, sets every contract output to `${None}`, calls
+`Validate Task Input    <Contract>`, and sets every contract output's value
+with `VAR … scope=${BPMN:TASK}`.
 
 ## Workflow: add a topic
 
@@ -68,9 +69,10 @@ every contract output with `VAR … scope=${BPMN:TASK}`.
    [reference/pydantic-models.md](reference/pydantic-models.md).
 4. **Robot suite** `<package>_<topic words>.robot`: import
    `OperatonContracts    OperatonTasks`, declare a default for every
-   contract input, start with `${input}=    Validate Task Input    <Contract>`,
-   use `${input}[alias]` afterwards, and set outputs via
-   `VAR ${x}=  …  scope=${BPMN:TASK}`. See
+   contract input, set every contract output to `${None}` with
+   `VAR ${x}=  ${None}  scope=${BPMN:TASK}`, then call
+   `${input}=    Validate Task Input    <Contract>`, use `${input}[alias]`
+   afterwards, and set the outputs' values with task scope. See
    [reference/robot-tasks.md](reference/robot-tasks.md).
 5. **Library keyword + keyword models** in `<Package>*.py` / `<Package>Models.py`:
    validate inputs with strict Pydantic models, validate API rows with output
@@ -170,9 +172,11 @@ change the skill in the `operaton-contracts` repository.
 - One template per topic, one topic per template, all with the same embedded
   icon and the pinned `$schema` URL. Do not commit a copy of the schema.
 - Task contracts and, by default, `TaskTemplate` specs live in deployed
-  `OperatonTasks.py`; every task validates its inputs with `Validate Task Input`
-  before any other step. Deployed code imports the `OperatonContracts`
-  dependency, not build-time tooling.
+  `OperatonTasks.py`; every task first sets each output to `${None}` with
+  task scope (output mappings run before a BPMN error reaches its boundary
+  event, so they must resolve), then validates its inputs with
+  `Validate Task Input` before doing anything else. Deployed code imports the
+  `OperatonContracts` dependency, not build-time tooling.
 - Every engine input has a typed default in its suite (`${EMPTY}`, `${False}`,
   `${0}`, `@{EMPTY}`) matching the contract; every output uses
   `scope=${BPMN:TASK}`; `process-variables = false`.

@@ -12,6 +12,7 @@ from dataclasses import field
 from pathlib import Path
 from typing import Any
 
+from pydantic import ValidationError
 from robot.api import get_model
 from robot.api.deco import keyword
 from robot.api.deco import library
@@ -87,7 +88,39 @@ class OperatonContracts:
             value = builtin.get_variable_value(f"${{{alias}}}", _MISSING)
             if value is not _MISSING:
                 variables[alias] = value
-        return validate_input(model, variables)
+        try:
+            return validate_input(model, variables)
+        except ValidationError as error:
+            raise InvalidTaskInput(contract, error) from None
+
+
+class InvalidTaskInput(AssertionError):
+    """Task input failed its contract.
+
+    The first message line is ``InvalidTaskInput``: purjo uses the first line
+    of a failure as the BPMN ``errorCode`` and the rest as ``errorMessage``,
+    so error boundary events can catch invalid input by a stable code.
+    """
+
+    ROBOT_SUPPRESS_NAME = True
+    CODE = "InvalidTaskInput"
+
+    def __init__(self, contract: str, error: ValidationError) -> None:
+        self.errors = error.errors(include_url=False)
+        lines = []
+        for item in self.errors:
+            where = ".".join(str(part) for part in item["loc"]) or contract
+            # Missing fields and model-level errors carry the whole input.
+            whole = item["type"] == "missing" or not item["loc"]
+            got = "" if whole else f" (got {_short(item['input'])})"
+            lines.append(f"{where}: {item['msg']}{got}")
+        super().__init__("\n".join([self.CODE, f"{contract}:", *lines]))
+
+
+def _short(value: object, limit: int = 60) -> str:
+    """Return ``repr(value)``, shortened for failure messages."""
+    text = repr(value)
+    return text if len(text) <= limit else text[: limit - 3] + "..."
 
 
 def normalize(name: str) -> str:
@@ -163,8 +196,15 @@ class _SuiteVisitor(ModelVisitor):  # type: ignore[misc]
         self.task = None
 
     def visit_Var(self, node: Any) -> None:
+        # ``VAR ${x}=  ${None}`` is the placeholder a task sets before it can
+        # fail, so that output mappings resolve; it does not set the output.
         scope = normalize(_unwrap(node.scope or ""))
-        if self.task is not None and scope == normalize("BPMN:TASK"):
+        placeholder = tuple(value.casefold() for value in node.value) == ("${none}",)
+        if (
+            self.task is not None
+            and scope == normalize("BPMN:TASK")
+            and not placeholder
+        ):
             name = normalize(_variable_name(node.name))
             self.suite.task_outputs[self.task].add(name)
 
@@ -249,7 +289,8 @@ class RobotSuites:
             if normalize(alias) not in suite.task_outputs[key]:
                 errors.append(
                     f"{suite.path.name}: task {task!r} must set output "
-                    f"{alias!r} with VAR ... scope={TASK_SCOPE}"
+                    f"{alias!r} with VAR ... scope={TASK_SCOPE} "
+                    "(a ${None} placeholder does not count)"
                 )
         contract = spec.inputs.__name__
         if contract not in suite.task_contracts[key]:

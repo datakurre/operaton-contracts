@@ -113,3 +113,7 @@ When purjo runs a task, process variables arrive as:
   string form fields with `YYYY-MM-DD` values for dates;
 - `null` variables as `None`, which replaces the suite default and fails
   non-optional fields.
+
+Literal (non-expression) input parameters in the BPMN always arrive as
+strings: `5` is the string `"5"`, while `${5}` is an integer. See
+[Values from the engine](tutorial.md#values-from-the-engine).

@@ -27,6 +27,7 @@ from pydantic import Field
 from pydantic import StringConstraints
 from pydantic import ValidationError
 from pydantic import create_model
+from pydantic import model_validator
 
 import OperatonContracts
 from OperatonContracts import OperatonContracts as OperatonContractsLibrary
@@ -107,6 +108,8 @@ ${dry_run}    ${False}
 
 *** Tasks ***
 greet
+    VAR    ${result}=    ${None}    scope=${BPMN:TASK}
+    VAR    ${greeting}=    ${NONE}    scope=BPMN:TASK
     ${input}=    OperatonContracts.Validate Task Input    DemoInput
     VAR    ${greeting: str}=    Hello ${name}    scope=BPMN:TASK
     VAR    ${result}=    ${{{}}}    scope=${BPMN:TASK}
@@ -874,6 +877,17 @@ class ElementTemplateRenderTests(unittest.TestCase):
             DemoOutput.model_validate({"greeting": "hi", "result": {}, "extra": 1})
 
 
+class RangeInput(TaskContract):
+    low: int = Field(alias="low", title="Low")
+    high: int = Field(alias="high", title="High")
+
+    @model_validator(mode="after")
+    def ordered(self) -> "RangeInput":
+        if self.low > self.high:
+            raise ValueError("low must not exceed high")
+        return self
+
+
 class FakeBuiltIn:
     def __init__(self, variables: dict[str, Any]) -> None:
         self.variables = variables
@@ -917,7 +931,7 @@ class ValidateTaskInputTests(unittest.TestCase):
         )
 
     def test_rejects_invalid_values_and_unknown_contracts(self) -> None:
-        with self.assertRaisesRegex(ValidationError, "dryRun"):
+        with self.assertRaises(robotframework.InvalidTaskInput) as raised:
             self.validate(
                 "DemoInput",
                 name="Ada",
@@ -927,6 +941,31 @@ class ValidateTaskInputTests(unittest.TestCase):
                 count=3,
                 dryRun="false",
             )
+        self.assertTrue(raised.exception.ROBOT_SUPPRESS_NAME)
+        self.assertEqual(
+            str(raised.exception).splitlines(),
+            [
+                "InvalidTaskInput",
+                "DemoInput:",
+                "dryRun: Input should be a valid boolean (got 'false')",
+            ],
+        )
+        with self.assertRaises(robotframework.InvalidTaskInput) as raised:
+            self.validate("DemoInput", mode="long", ids="x" * 100, day="2026-01-02")
+        self.assertEqual(
+            str(raised.exception).splitlines()[2:],
+            [
+                "name: Field required",
+                f"ids: Input should be a valid list (got '{'x' * 56}...)",
+                "count: Field required",
+            ],
+        )
+        with self.assertRaises(robotframework.InvalidTaskInput) as raised:
+            self.validate("RangeInput", low=2, high=1)
+        self.assertEqual(
+            str(raised.exception).splitlines()[1:],
+            ["RangeInput:", "RangeInput: Value error, low must not exceed high"],
+        )
         for name in ("Missing", "SCHEMA_URL", "FakeBuiltIn"):
             with self.subTest(name=name):
                 with self.assertRaisesRegex(ValueError, "not a TaskContract"):
@@ -968,16 +1007,18 @@ class PackageCheckTests(unittest.TestCase):
                 "Duplicate filename: demo-greet.json",
                 "Duplicate filename: demo-greet.json",
                 "Topic is reserved: legacy.topic",
-                "Topic has no template spec: demo.unmapped",
+                "Topic has no template spec: demo.unmapped (add a TaskTemplate for "
+                "it, or serve it from another package)",
                 "greet.robot: input 'note' needs a default in *** Variables ***",
                 "greet.robot: task 'Greet' must set output 'result' with "
-                "VAR ... scope=${BPMN:TASK}",
+                "VAR ... scope=${BPMN:TASK} (a ${None} placeholder does not count)",
                 "demo.process: set process-variables = false",
                 "greet.robot: input 'note' needs a default in *** Variables ***",
                 "greet.robot: task 'Greet' must set output 'result' with "
-                "VAR ... scope=${BPMN:TASK}",
+                "VAR ... scope=${BPMN:TASK} (a ${None} placeholder does not count)",
                 "legacy.topic: no Robot suite defines task 'Missing'",
-                "Topic missing from [tool.purjo.topics]: demo.missing",
+                "Topic missing from [tool.purjo.topics]: demo.missing "
+                '(add [tool.purjo.topics."demo.missing"] with the Robot task name)',
             ],
         )
 
@@ -1074,7 +1115,10 @@ class PackageCheckTests(unittest.TestCase):
         with DemoPackage(pyproject="") as package:
             self.assertEqual(
                 check_package(package.root, [DEMO]),
-                ["Topic missing from [tool.purjo.topics]: demo.greet"],
+                [
+                    "Topic missing from [tool.purjo.topics]: demo.greet "
+                    '(add [tool.purjo.topics."demo.greet"] with the Robot task name)'
+                ],
             )
 
     def test_variable_names_are_unwrapped_and_untyped(self) -> None:

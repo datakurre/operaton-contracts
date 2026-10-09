@@ -107,6 +107,11 @@ path = "<path>/production-api"
 mount-point = "kv"
 ```
 
+`on-fail = "ERROR"` turns failures into BPMN errors (the first failure line is
+the `errorCode`). Catching them with boundary events needs purjo 1.0rc2 or
+newer and suites that set their outputs first; see
+[robot-tasks.md](robot-tasks.md#outputs).
+
 Vault keys become Robot variables; declare them as `Secret:` in suites.
 Non-secret endpoints come from uppercase environment variables
 (`${api_endpoint}    %{PACKAGE_API_ENDPOINT=}`). Serving needs `VAULT_ADDR`
