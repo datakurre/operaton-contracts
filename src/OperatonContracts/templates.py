@@ -94,7 +94,9 @@ class TaskTemplate:
     ``input_group`` and ``output_group`` are group ids from ``groups``; use
     the same id for both to show every property in one group. ``icon`` is an
     SVG path, relative to the project root, that replaces the configured
-    ``icon`` for this template.
+    ``icon`` for this template. ``keep_versions`` lists earlier published
+    versions that ``generate`` copies unchanged from the existing template
+    file, so the modeler can still resolve and upgrade diagrams using them.
     """
 
     topic: str
@@ -109,6 +111,7 @@ class TaskTemplate:
     output_group: str = "outputs"
     version: int = 1
     icon: str | None = None
+    keep_versions: tuple[int, ...] = ()
 
 
 def contract_properties(
@@ -433,6 +436,8 @@ def _output_property(alias: str, schema: dict[str, Any], group: str) -> dict[str
 
 def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str, Any]:
     """Render one element template from its spec and contract models."""
+    if not _is_version(spec.version):
+        raise TemplateError(f"{spec.topic}: version must be an integer of at least 1")
     group_ids = [group.id for group in spec.groups]
     for group_id in (spec.input_group, spec.output_group):
         if group_id not in group_ids:
@@ -473,7 +478,7 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
     }
 
 
-def dumps(template: dict[str, Any]) -> str:
+def dumps(template: dict[str, Any] | list[dict[str, Any]]) -> str:
     """Serialize a template in the committed file format."""
     return json.dumps(template, indent=2, ensure_ascii=False) + "\n"
 
@@ -513,17 +518,106 @@ def validate(paths: Sequence[Path], schema_url: str) -> None:
         print(f"Validated {path.name}")
 
 
+def read_templates(path: Path) -> list[dict[str, Any]]:
+    """Return the templates in a file: one object or a list, or none if missing."""
+    if not path.exists():
+        return []
+    try:
+        content = json.loads(path.read_text(encoding="utf-8"))
+    except ValueError as error:
+        raise TemplateError(f"{path.name}: invalid JSON: {error}") from error
+    templates = content if isinstance(content, list) else [content]
+    if not all(isinstance(template, dict) for template in templates):
+        raise TemplateError(f"{path.name}: expected template objects")
+    return templates
+
+
+def _versions(templates: Iterable[dict[str, Any]], template_id: str) -> list[Any]:
+    return [
+        template.get("version")
+        for template in templates
+        if template.get("id") == template_id
+    ]
+
+
+def _is_version(value: object) -> bool:
+    # bool is an int subclass, but True must not stand for version 1.
+    return type(value) is int and value >= 1
+
+
+def _check_keep_versions(spec: TaskTemplate) -> None:
+    versions: object = spec.keep_versions
+    if (
+        not isinstance(versions, tuple)
+        or not all(_is_version(version) for version in versions)
+        or len(set(versions)) != len(versions)
+        or any(version >= spec.version for version in versions)
+    ):
+        raise TemplateError(
+            f"{spec.topic}: keep_versions must be a tuple of unique versions "
+            f"from 1 to {spec.version - 1}, e.g. (1,), not {versions!r}"
+        )
+
+
+def _find_template(template_dir: Path, template_id: str) -> str | None:
+    """Return the name of another file holding ``template_id``, if any."""
+    for path in sorted(template_dir.glob("*.json")):
+        try:
+            templates = read_templates(path)
+        except TemplateError:
+            continue
+        if _versions(templates, template_id):
+            return path.name
+    return None
+
+
+def _kept_templates(spec: TaskTemplate, template_dir: Path) -> list[dict[str, Any]]:
+    """Return the spec's kept versions, newest first, from the existing file."""
+    path = template_dir / spec.filename
+    if not path.exists():
+        other = _find_template(template_dir, spec.template_id)
+        hint = (
+            f"rename {other} to {spec.filename} if filename changed"
+            if other
+            else "restore the file from version control"
+        )
+        raise TemplateError(
+            f"{spec.filename}: kept versions of {spec.template_id} need the "
+            f"existing file; {hint}"
+        )
+    existing = read_templates(path)
+    kept = []
+    for version in sorted(spec.keep_versions, reverse=True):
+        matches = [
+            template
+            for template in existing
+            if template.get("id") == spec.template_id
+            and template.get("version") == version
+        ]
+        if len(matches) != 1:
+            problem = "is missing" if not matches else "appears more than once"
+            raise TemplateError(
+                f"{spec.filename}: kept version {version} of {spec.template_id} "
+                f"{problem}; restore the file from version control"
+            )
+        kept.append(matches[0])
+    return kept
+
+
 def render_all(
     specs: Sequence[TaskTemplate],
     *,
     icon_svg: bytes,
     schema_url: str,
     icons: Mapping[str, bytes] | None = None,
+    template_dir: Path | None = None,
 ) -> dict[str, str]:
     """Render every spec, keyed by template filename.
 
     ``icons`` maps a spec's ``icon`` path to its SVG and replaces
-    ``icon_svg`` for the specs that set one.
+    ``icon_svg`` for the specs that set one. Specs with ``keep_versions``
+    copy those versions from their existing file in ``template_dir`` and
+    render a list, newest first; other specs render a single template.
     """
     icons = icons or {}
     rendered: dict[str, str] = {}
@@ -533,9 +627,17 @@ def render_all(
             if spec.icon not in icons:
                 raise TemplateError(f"{spec.topic}: icon {spec.icon!r} is not loaded")
             svg = icons[spec.icon]
-        rendered[spec.filename] = dumps(
-            render(spec, icon_svg=svg, schema_url=schema_url)
-        )
+        template = render(spec, icon_svg=svg, schema_url=schema_url)
+        _check_keep_versions(spec)
+        if not spec.keep_versions:
+            rendered[spec.filename] = dumps(template)
+            continue
+        if template_dir is None:
+            raise TemplateError(
+                f"{spec.topic}: keep_versions needs the template directory"
+            )
+        kept = _kept_templates(spec, template_dir)
+        rendered[spec.filename] = dumps([template, *kept])
     return rendered
 
 
@@ -562,6 +664,50 @@ def drift(template_dir: Path, rendered: dict[str, str]) -> list[str]:
     ]
     for filename, text in rendered.items():
         path = template_dir / filename
-        if not path.exists() or path.read_text(encoding="utf-8") != text:
-            errors.append(f"Out of date: {filename}; run generate")
+        if path.exists() and path.read_text(encoding="utf-8") == text:
+            continue
+        errors.extend(_version_drift(path, json.loads(text)))
+        errors.append(f"Out of date: {filename}; run generate")
+    return errors
+
+
+def _version_drift(path: Path, rendered: Any) -> list[str]:
+    """Explain version changes between a committed and a rendered file."""
+    try:
+        committed = read_templates(path)
+    except TemplateError as error:
+        return [str(error)]
+    templates = rendered if isinstance(rendered, list) else [rendered]
+    current = templates[0]
+    template_id, version = current["id"], current["version"]
+    versions = _versions(templates, template_id)
+    errors = [
+        f"{path.name}: template {other.get('id')!r} would be dropped; it "
+        "belongs in its own file"
+        for other in committed
+        if "id" in other and other["id"] != template_id
+    ]
+    for old in _versions(committed, template_id):
+        if old in versions:
+            continue
+        if _is_version(old) and old > version:
+            errors.append(
+                f"{path.name}: committed version {old} of {template_id} is "
+                f"newer than version {version}; set version above {old}"
+            )
+        else:
+            errors.append(
+                f"{path.name}: version {old} of {template_id} would be dropped; "
+                "add it to keep_versions, or run generate to drop it"
+            )
+    same = [
+        template
+        for template in committed
+        if template.get("id") == template_id and template.get("version") == version
+    ]
+    if same and same[0] != current:
+        errors.append(
+            f"{path.name}: version {version} of {template_id} changed; if it "
+            f"is published, bump version and add {version} to keep_versions"
+        )
     return errors

@@ -40,13 +40,21 @@ TaskTemplate(
     groups=(TemplateGroup("sisu", "Sisu"),),  # default: inputs/Inputs, outputs/Results
     input_group="sisu",            # group id for inputs (default "inputs")
     output_group="sisu",           # group id for outputs (default "outputs")
-    version=1,                     # bump when bindings change incompatibly
+    version=1,                     # bump when a published template changes
     icon="sisu.svg",               # optional; replaces the configured icon
+    keep_versions=(),              # earlier published versions kept in the file
 )
 ```
 
 `input_group` and `output_group` must be ids in `groups`; use one id for both
 to show every property in a single panel group.
+
+After a template is published, bump `version` for every change and add the
+previous version to `keep_versions`: `generate` copies kept versions unchanged
+from the committed file (a JSON list, newest first), so the modeler can still
+upgrade diagrams using them. The worker serves only the latest contract.
+Commit `.operaton/` when using `keep_versions`; remove a version by dropping
+it from the tuple and running `generate`.
 
 The CLI reads the package configuration and uses the pinned schema by default;
 set `schema-url` when the package must pin a different schema version.

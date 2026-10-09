@@ -11,12 +11,14 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr
 from contextlib import redirect_stdout
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from enum import Enum
 from typing import Annotated
 from typing import Any
 from typing import Literal
+from typing import cast
 from unittest.mock import patch
 
 from jsonschema import Draft7Validator
@@ -36,7 +38,10 @@ from OperatonContracts import templates as operaton_templates
 from OperatonContracts.templates import TaskTemplate
 from OperatonContracts.templates import TemplateError
 from OperatonContracts.templates import TemplateGroup
+from OperatonContracts.templates import drift
+from OperatonContracts.templates import dumps
 from OperatonContracts.templates import render
+from OperatonContracts.templates import write_templates
 
 SCHEMA_URL = "https://example.invalid/schema.json"
 # A copy of the pinned upstream schema, so rendered templates validate offline.
@@ -934,6 +939,180 @@ class CommandTests(unittest.TestCase):
                     "Out of date: demo-greet.json; run generate",
                 ],
             )
+
+    def test_keep_versions_copy_published_versions_from_the_file(self) -> None:
+        def render_files(spec: TaskTemplate, template_dir: Path) -> dict[str, str]:
+            return operaton_templates.render_all(
+                (spec,), icon_svg=b"", schema_url=SCHEMA_URL, template_dir=template_dir
+            )
+
+        with tempfile.TemporaryDirectory() as directory:
+            template_dir = Path(directory)
+            path = template_dir / DEMO.filename
+            write_templates(template_dir, render_files(DEMO, template_dir))
+            published = json.loads(path.read_text())
+
+            # Version 2 changes the contract and keeps version 1 as published.
+            v2 = replace(
+                DEMO, version=2, description="Greets twice.", keep_versions=(1,)
+            )
+            rendered = render_files(v2, template_dir)
+            self.assertIn(
+                "Out of date: demo-greet.json; run generate",
+                drift(template_dir, rendered),
+            )
+            write_templates(template_dir, rendered)
+            templates = json.loads(path.read_text())
+            self.assertEqual([t["version"] for t in templates], [2, 1])
+            self.assertEqual(templates[1], published)
+            self.assertEqual(drift(template_dir, render_files(v2, template_dir)), [])
+            validator = Draft7Validator(json.loads(UPSTREAM_SCHEMA.read_text()))
+            self.assertEqual(
+                [error.message for error in validator.iter_errors(templates)], []
+            )
+
+            # Forgetting keep_versions or changing a version is explained.
+            v3 = replace(v2, version=3, keep_versions=())
+            self.assertEqual(
+                drift(template_dir, render_files(v3, template_dir)),
+                [
+                    "demo-greet.json: version 2 of fi.example.demo-greet would be "
+                    "dropped; add it to keep_versions, or run generate to drop it",
+                    "demo-greet.json: version 1 of fi.example.demo-greet would be "
+                    "dropped; add it to keep_versions, or run generate to drop it",
+                    "Out of date: demo-greet.json; run generate",
+                ],
+            )
+            changed = replace(v2, description="Changed.")
+            self.assertEqual(
+                drift(template_dir, render_files(changed, template_dir)),
+                [
+                    "demo-greet.json: version 2 of fi.example.demo-greet changed; "
+                    "if it is published, bump version and add 2 to keep_versions",
+                    "Out of date: demo-greet.json; run generate",
+                ],
+            )
+
+            for bad, message in (
+                (replace(v2, keep_versions=(2,)), "unique versions from 1 to 1"),
+                (replace(v2, keep_versions=(1, 1)), "unique versions from 1 to 1"),
+                (replace(v2, keep_versions=(0,)), "unique versions from 1 to 1"),
+                (replace(v2, keep_versions=cast(Any, ("1",))), "not \\('1',\\)"),
+                (replace(v2, keep_versions=cast(Any, (True,))), "not \\(True,\\)"),
+                # A common typo: (1) is the integer 1, not a tuple.
+                (replace(v2, keep_versions=cast(Any, 1)), "e.g. \\(1,\\), not 1"),
+                (replace(v2, version=cast(Any, True)), "version must be an integer"),
+                (replace(v2, version=0), "version must be an integer"),
+                (
+                    replace(v2, version=5, keep_versions=(3,)),
+                    "kept version 3 of fi.example.demo-greet is missing",
+                ),
+            ):
+                with self.subTest(keep_versions=bad.keep_versions):
+                    with self.assertRaisesRegex(TemplateError, message):
+                        render_files(bad, template_dir)
+            with self.assertRaisesRegex(TemplateError, "needs the template directory"):
+                operaton_templates.render_all(
+                    (v2,), icon_svg=b"", schema_url=SCHEMA_URL
+                )
+
+            for content, message in (
+                ("{", "invalid JSON"),
+                ("[1]", "expected template objects"),
+            ):
+                path.write_text(content)
+                with self.subTest(content=content):
+                    with self.assertRaisesRegex(TemplateError, message):
+                        render_files(v2, template_dir)
+                    self.assertEqual(
+                        [
+                            message in error
+                            for error in drift(
+                                template_dir, render_files(DEMO, template_dir)
+                            )
+                        ],
+                        [True, False],
+                    )
+
+    def test_keep_versions_explain_files_versions_and_ids(self) -> None:
+        def render_files(spec: TaskTemplate, template_dir: Path) -> dict[str, str]:
+            return operaton_templates.render_all(
+                (spec,), icon_svg=b"", schema_url=SCHEMA_URL, template_dir=template_dir
+            )
+
+        def published(spec: TaskTemplate) -> dict[str, Any]:
+            return render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+
+        v1, v2, v3 = (replace(DEMO, version=version) for version in (1, 2, 3))
+        with tempfile.TemporaryDirectory() as directory:
+            template_dir = Path(directory)
+            path = template_dir / DEMO.filename
+            kept = replace(v3, keep_versions=(2, 1))
+
+            # A renamed file is found by template id; otherwise restore it.
+            with self.assertRaisesRegex(TemplateError, "restore the file"):
+                render_files(kept, template_dir)
+            (template_dir / "broken.json").write_text("{")
+            (template_dir / "another.json").write_text(
+                dumps({**published(v1), "id": "another.id"})
+            )
+            (template_dir / "old.json").write_text(
+                dumps([published(v2), published(v1)])
+            )
+            with self.assertRaisesRegex(TemplateError, "rename old.json to demo-greet"):
+                render_files(kept, template_dir)
+            (template_dir / "old.json").rename(path)
+            (template_dir / "broken.json").unlink()
+            (template_dir / "another.json").unlink()
+            self.assertEqual(
+                [
+                    t["version"]
+                    for t in json.loads(render_files(kept, template_dir)[path.name])
+                ],
+                [3, 2, 1],
+            )
+
+            # A duplicated kept version is not silently resolved.
+            path.write_text(dumps([published(v2), published(v2), published(v1)]))
+            with self.assertRaisesRegex(TemplateError, "2 .* appears more than once"):
+                render_files(kept, template_dir)
+
+            # A downgrade asks for a higher version; other ids are reported.
+            other = {**published(v1), "id": "other.id"}
+            path.write_text(dumps([published(v3), published(v2), published(v1), other]))
+            self.assertEqual(
+                drift(
+                    template_dir,
+                    render_files(replace(v2, keep_versions=(1,)), template_dir),
+                ),
+                [
+                    "demo-greet.json: template 'other.id' would be dropped; it "
+                    "belongs in its own file",
+                    "demo-greet.json: committed version 3 of fi.example.demo-greet "
+                    "is newer than version 2; set version above 3",
+                    "Out of date: demo-greet.json; run generate",
+                ],
+            )
+
+    def test_keep_versions_round_trip_through_the_command(self) -> None:
+        with DemoPackage() as package, redirect_stdout(io.StringIO()):
+            self.assertEqual(package.main("generate"), 0)
+            specs = next(package.root.glob("demo_specs_*.py"))
+            specs.write_text(
+                f"from dataclasses import replace\nfrom {__name__} import DEMO\n\n"
+                "TEMPLATES = (replace(DEMO, version=2, keep_versions=(1,)),)\n"
+            )
+            sys.modules.pop(specs.stem, None)
+            self.assertEqual(package.main("generate"), 0)
+            self.assertEqual(package.main("check"), 0)
+            self.assertEqual(package.main("generate"), 0)
+            templates = json.loads(
+                (
+                    package.root / ".operaton/element-templates/demo-greet.json"
+                ).read_text()
+            )
+            self.assertEqual([t["version"] for t in templates], [2, 1])
+            sys.modules.pop(specs.stem, None)
 
     def test_validate_uses_pinned_schema(self) -> None:
         schema = {

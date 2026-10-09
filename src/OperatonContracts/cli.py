@@ -205,6 +205,7 @@ def main(argv: Sequence[str] | None = None) -> int:
             icon_svg=config.icon_svg,
             schema_url=config.schema_url,
             icons=config.icons,
+            template_dir=config.template_dir,
         )
     except (ConfigError, TemplateError) as error:
         print(error, file=sys.stderr)

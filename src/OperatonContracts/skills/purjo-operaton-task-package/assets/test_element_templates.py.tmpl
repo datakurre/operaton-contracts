@@ -21,6 +21,7 @@ class ElementTemplatePackageTests(unittest.TestCase):
             icon_svg=config.icon_svg,
             schema_url=config.schema_url,
             icons=config.icons,
+            template_dir=config.template_dir,
         )
         self.assertEqual(drift(config.template_dir, rendered), [])
 

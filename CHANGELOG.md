@@ -13,6 +13,12 @@
 - `TaskTemplate.icon` embeds a per-template SVG instead of the configured
   `icon`; `Config.icons` holds the loaded files and `render_all` accepts them
   as `icons=`. Icons outside the project root are rejected.
+- `TaskTemplate.keep_versions` keeps earlier published template versions:
+  `generate` copies them unchanged from the existing file and writes a list,
+  newest first, so the modeler can upgrade diagrams. `check` explains
+  versions that would be dropped and changed versions that need a bump.
+  `render_all` takes `template_dir=` to read them. `version` must be an
+  integer of at least 1.
 - Template hints on output fields are rejected.
 - `check` requires list (`@`) defaults for array inputs and dictionary (`&`)
   defaults for object inputs, and suggests `&{EMPTY}`.

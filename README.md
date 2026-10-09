@@ -131,7 +131,9 @@ The generated `.operaton/` templates do not have to be committed. Robot
 packages may add `.operaton/` to `.gitignore` and run the
 `operaton-contracts generate` command when the modeler needs the templates. If
 using `check` in CI, generate the files first because `check` verifies that the
-on-disk templates match the contracts.
+on-disk templates match the contracts. Packages that keep earlier template
+versions with `keep_versions` must commit `.operaton/`, because those versions
+exist only in the committed files.
 
 `check` fails when on-disk templates differ from the generated ones, when
 specs and `[tool.purjo.topics]` differ, when a topic is reserved or lacks

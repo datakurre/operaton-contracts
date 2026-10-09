@@ -36,7 +36,8 @@ TEMPLATES = (
         groups=(TemplateGroup("main", "Processing"),),
         input_group="main",
         output_group="main",
-        version=1,  # bump when bindings change incompatibly
+        version=1,  # bump when a published template changes
+        keep_versions=(),  # earlier published versions; see Versions
     ),
 )
 ```
@@ -72,7 +73,44 @@ The generated `.operaton/` directory is optional source control state. A robot
 package may add `.operaton/` to `.gitignore`; run `operaton-contracts generate`
 to recreate the templates when the modeler needs them. If CI runs `check` with
 the directory ignored, generate the files first: `check` verifies the on-disk
-templates against the contracts and reports missing or stale files.
+templates against the contracts and reports missing or stale files. Packages
+that use `keep_versions` must commit `.operaton/`, because earlier versions
+exist only there.
+
+## Versions
+
+The worker always serves the latest contract, but diagrams keep the template
+version they were modeled with. To let the modeler resolve those diagrams and
+offer "Update template", keep earlier published versions in the file:
+
+```python
+TaskTemplate(..., version=4, keep_versions=(2, 3))
+```
+
+- Bump `version` whenever a published template changes; until then, keep
+  regenerating the same version.
+- `generate` renders the current version from the contracts and copies each
+  kept version unchanged from the existing file (matched by `id` and
+  `version`), writing a JSON list, newest first. Without `keep_versions` the
+  file holds a single template.
+- `version` and kept versions are integers of at least 1; `keep_versions` is
+  a tuple (write `(1,)`, not `(1)`) of unique versions lower than `version`.
+- Each kept version must appear exactly once in the file; a missing or
+  duplicated one is an error (restore the file from version control) rather
+  than silently resolved. If the file is gone but another file holds the
+  template id, the error suggests renaming it, e.g. after a `filename`
+  change.
+- `check` explains drift: a committed version absent from `keep_versions`
+  "would be dropped", a committed version newer than `version` asks for a
+  higher version, a changed current version should get a bump if it is
+  already published, and templates with another id in the file would be
+  dropped.
+- Kept versions are the committed file's content, so `check` cannot detect a
+  hand edit to them; review such diffs like any other change.
+- Remove a version by dropping it from `keep_versions` and running
+  `generate`.
+- Kept versions are copied as they were, so they may differ in anything,
+  including `appliesTo`.
 
 ## Generated structure
 
