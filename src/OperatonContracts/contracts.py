@@ -90,8 +90,9 @@ def load_contract(module: ModuleType, name: str) -> type[TaskContract]:
 def import_contracts(name: str, fallback_dirs: Iterable[str] = ()) -> ModuleType:
     """Import the contracts module, retrying from ``fallback_dirs``.
 
-    A directory is added to ``sys.path`` only when the module itself (not one
-    of its dependencies) is missing and the directory is not there already.
+    Each directory not yet on ``sys.path`` is tried in turn while the module
+    itself (not one of its dependencies) is missing; a directory is kept on
+    ``sys.path`` only if the module was found there.
     """
     try:
         return importlib.import_module(name)
@@ -99,7 +100,13 @@ def import_contracts(name: str, fallback_dirs: Iterable[str] = ()) -> ModuleType
         if error.name != name:
             raise
         for directory in fallback_dirs:
-            if directory not in sys.path:
-                sys.path.insert(0, directory)
+            if directory in sys.path:
+                continue
+            sys.path.insert(0, directory)
+            try:
                 return importlib.import_module(name)
+            except ModuleNotFoundError as retry:
+                if retry.name != name:
+                    raise
+                sys.path.remove(directory)
         raise

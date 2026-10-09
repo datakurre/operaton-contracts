@@ -6,6 +6,7 @@ works without it.
 
 from __future__ import annotations
 
+import os
 from dataclasses import dataclass
 from dataclasses import field
 from pathlib import Path
@@ -29,7 +30,17 @@ TASK_SCOPE = "${BPMN:TASK}"
 VALIDATE_KEYWORD = "Validate Task Input"
 # Directories never collected as task suites (purjo collects suites
 # recursively; tests and tooling are excluded from robot.zip by .wrapignore).
-SKIPPED_DIRS = frozenset({"tests", "lib", "examples", "node_modules", "__pycache__"})
+SKIPPED_DIRS = frozenset(
+    {
+        "tests",
+        "lib",
+        "examples",
+        "node_modules",
+        "__pycache__",
+        "venv",
+        "site-packages",
+    }
+)
 _MISSING = object()
 
 
@@ -97,11 +108,19 @@ def _variable_name(token: str) -> str:
     return _unwrap(token).split(":", 1)[0].strip()
 
 
+# Variable values that are a string or None, never e.g. a bool or a list.
+_UNTYPED_VALUES = frozenset({"${EMPTY}", "${SPACE}", "${None}", "${NONE}"})
+
+
 def _is_typed(declared: str, values: tuple[str, ...]) -> bool:
     """Whether a suite default yields a non-string value at runtime."""
     if declared[0] in "@&" or ":" in declared[2:-1]:
         return True
-    return len(values) == 1 and values[0].startswith(("${", "@{", "&{"))
+    return (
+        len(values) == 1
+        and values[0].startswith(("${", "@{", "&{"))
+        and values[0] not in _UNTYPED_VALUES
+    )
 
 
 @dataclass
@@ -147,15 +166,22 @@ class _SuiteVisitor(ModelVisitor):  # type: ignore[misc]
 
 
 def _suite_paths(root: Path) -> list[Path]:
-    return [
-        path
-        for path in sorted(root.rglob("*.robot"))
-        if not path.name.startswith("test_")
-        and not any(
-            part.startswith(".") or part in SKIPPED_DIRS
-            for part in path.relative_to(root).parts[:-1]
+    """Collect task suites, pruning hidden, tooling, and virtualenv directories."""
+    paths: list[Path] = []
+    for directory, subdirectories, filenames in os.walk(root):
+        subdirectories[:] = [
+            name
+            for name in subdirectories
+            if not name.startswith(".")
+            and name not in SKIPPED_DIRS
+            and not (Path(directory) / name / "pyvenv.cfg").exists()
+        ]
+        paths.extend(
+            Path(directory) / name
+            for name in filenames
+            if name.endswith(".robot") and not name.startswith("test_")
         )
-    ]
+    return sorted(paths)
 
 
 class RobotSuites:

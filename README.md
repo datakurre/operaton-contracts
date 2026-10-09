@@ -17,35 +17,38 @@ accepts and returns:
   agree.
 
 ```console
-uv add operaton-contracts                   # runtime: pydantic + robotframework
-uv add --group dev "operaton-contracts[templates]"   # adds jsonschema for validate
+uv add "operaton-contracts[robot]"   # runtime: pydantic + robotframework
+uv add --group dev "operaton-contracts[templates]"   # uv-only: jsonschema for validate
 ```
+
+When using devenv, provide `jsonschema` and development tools through
+`devenv.nix` instead of duplicating them in uv's `dev` group.
 
 ## Contracts
 
 ```python
 # OperatonTasks.py
 from datetime import date
-from typing import Any, Literal
+from typing import Any
 
 from pydantic import Field
 from OperatonContracts import TaskContract, template_hints
 
 
-class RescindStudyRightsInput(TaskContract):
-    study_right_ids: list[str] = Field(
-        alias="studyRightIds",
-        title="Study right IDs",
+class ProcessRecordsInput(TaskContract):
+    record_ids: list[str] = Field(
+        alias="recordIds",
+        title="Record IDs",
         min_length=1,
-        json_schema_extra=template_hints(value=["${studyRightId}"]),
+        json_schema_extra=template_hints(value=["${recordId}"]),
     )
-    cancellation_date: date = Field(
-        alias="cancellationDate", title="Cancellation date", strict=False
+    effective_date: date = Field(
+        alias="effectiveDate", title="Effective date", strict=False
     )
     dry_run: bool = Field(alias="dryRun", title="Dry run", default=False)
 
 
-class RescindStudyRightsOutput(TaskContract):
+class ProcessRecordsOutput(TaskContract):
     result: dict[str, Any] = Field(alias="result", title="Result variable")
 ```
 
@@ -63,14 +66,14 @@ Library     OperatonContracts    OperatonTasks
 
 *** Variables ***
 ${BPMN:TASK}    local
-@{studyRightIds}    @{EMPTY}
-${cancellationDate}    ${EMPTY}
+@{recordIds}    @{EMPTY}
+${effectiveDate}    ${EMPTY}
 ${dryRun}    ${False}
 
 *** Tasks ***
-Rescind Study Rights
-    ${input}=    Validate Task Input    RescindStudyRightsInput
-    Log    ${input}[studyRightIds]
+Process Records
+    ${input}=    Validate Task Input    ProcessRecordsInput
+    Log    ${input}[recordIds]
     VAR    ${result}=    ${{{}}}    scope=${BPMN:TASK}
 ```
 
@@ -85,32 +88,37 @@ the string `"0"` or `"false"`. The library imports the contracts module from
 ```toml
 # pyproject.toml of the robot package
 [tool.operaton-contracts]
-specs = "scripts.element_templates:TEMPLATES"   # module:attribute
-icon = "scripts/logo.svg"                       # optional SVG icon
+specs = "OperatonTasks:TEMPLATES"               # module:attribute
+icon = "logo.svg"                               # optional SVG icon
 reserved-topics = ["legacy.topic"]              # optional
 # schema-url = "…"                              # optional; pinned default
 ```
 
 ```python
-# scripts/element_templates.py
+# Append to OperatonTasks.py, after the task contracts.
 from OperatonContracts.templates import TaskTemplate, TemplateGroup
-from OperatonTasks import RescindStudyRightsInput, RescindStudyRightsOutput
 
 TEMPLATES = (
     TaskTemplate(
-        topic="study_rights.rescind",
-        template_id="org.example.study-rights-rescind",
-        name="Rescind Study Rights",
-        description="Rescind active study rights.",
-        filename="study-rights-rescind.json",
-        inputs=RescindStudyRightsInput,
-        outputs=RescindStudyRightsOutput,
-        groups=(TemplateGroup("main", "Rescission"),),
+        topic="records.process",
+        template_id="org.example.records-process",
+        name="Process Records",
+        description="Process selected records.",
+        filename="records-process.json",
+        inputs=ProcessRecordsInput,
+        outputs=ProcessRecordsOutput,
+        groups=(TemplateGroup("main", "Processing"),),
         input_group="main",
         output_group="main",
     ),
 )
 ```
+
+Co-locating the specs adds no package dependency when tasks already use
+`OperatonContracts` for `TaskContract` and `Validate Task Input`. Alternatively,
+put the declarations in a root-level `OperatonTemplates.py` and set
+`specs = "OperatonTemplates:TEMPLATES"`; list that file in `.wrapignore` so
+`pur wrap` leaves it out of the robot package.
 
 ```console
 operaton-contracts generate   # write .operaton/element-templates/*.json
@@ -118,7 +126,13 @@ operaton-contracts check      # offline: drift and package consistency
 operaton-contracts validate   # against the pinned upstream schema (network)
 ```
 
-`check` fails when committed templates differ from the generated ones, when
+The generated `.operaton/` templates do not have to be committed. Robot
+packages may add `.operaton/` to `.gitignore` and run the
+`operaton-contracts generate` command when the modeler needs the templates. If
+using `check` in CI, generate the files first because `check` verifies that the
+on-disk templates match the contracts.
+
+`check` fails when on-disk templates differ from the generated ones, when
 specs and `[tool.purjo.topics]` differ, when a topic is reserved or lacks
 `process-variables = false`, or when the suite defining a topic's task lacks a
 typed default for an input, the `Validate Task Input` call, or a
@@ -126,6 +140,18 @@ typed default for an input, the `Validate Task Input` call, or a
 matches them, suites are collected recursively (skipping hidden directories,
 `tests/`, `lib/`, `examples/`, and `test_*.robot`), and a task name defined in
 more than one suite is an error.
+
+## Agent skill
+
+The package bundles an agent skill for building robot packages with these
+conventions. Install it into `.agents/skills/` of your project, and refresh it
+after upgrades with `--force`:
+
+```console
+uv run operaton-contracts install-skill
+```
+
+See the [Agent skill](https://datakurre.github.io/operaton-contracts/skill/) page.
 
 ## Development
 
@@ -137,6 +163,9 @@ make build
 
 `make docs-serve` previews the documentation site, which is published to
 GitHub Pages from `main` by `.github/workflows/docs.yml`.
+The uv dependency groups provide test and documentation tools for uv-only
+development. When using devenv, those tools come from `devenv.nix`; project
+dependencies still come from uv.
 
 ## License
 

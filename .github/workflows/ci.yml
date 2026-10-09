@@ -24,6 +24,12 @@ jobs:
       - run: uv run mypy src tests
       - run: uv run pytest
       - run: uv build
+      - name: Install the wheel in a clean environment and install the skill
+        run: |
+          uv venv "$RUNNER_TEMP/wheel"
+          uv pip install --python "$RUNNER_TEMP/wheel" dist/*.whl
+          "$RUNNER_TEMP/wheel/bin/operaton-contracts" install-skill --root "$RUNNER_TEMP/project"
+          test -f "$RUNNER_TEMP/project/.agents/skills/purjo-operaton-task-package/SKILL.md"
 
   core-without-robot:
     # The core API must work without the robot extra.

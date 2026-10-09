@@ -24,12 +24,19 @@ element template (modeler)        Robot task: Validate Task Input → keywords
 ## Install
 
 ```console
-uv add operaton-contracts
-uv add --group dev "operaton-contracts[templates]"
+uv add "operaton-contracts[robot]"
+uv add --group dev "operaton-contracts[templates]"   # uv-only: jsonschema for validate
 ```
 
-The runtime needs only `pydantic` and `robotframework`. The `templates` extra
-adds `jsonschema` for `operaton-contracts validate`.
+The core needs only `pydantic`; the `robot` extra adds `robotframework` for
+the `OperatonContracts` Robot library and the suite checks. Without Robot
+Framework, use `validate_input` and `validate_output` directly. The
+`templates` extra adds `jsonschema` for `operaton-contracts validate`. When using devenv,
+provide development tools and `jsonschema` through `devenv.nix` instead of
+duplicating them in uv's `dev` group.
+
+To teach coding agents these conventions, install the bundled
+[agent skill](skill.md): `uv run operaton-contracts install-skill`.
 
 ## A complete topic
 
@@ -71,12 +78,13 @@ on-fail = "ERROR"
 process-variables = false
 
 [tool.operaton-contracts]
-specs = "scripts.element_templates:TEMPLATES"
+specs = "OperatonTasks:TEMPLATES"
 ```
 
-```python title="scripts/element_templates.py"
+Append this declaration to `OperatonTasks.py` after the contract models:
+
+```python title="OperatonTasks.py"
 from OperatonContracts.templates import TaskTemplate
-from OperatonTasks import GreetInput, GreetOutput
 
 TEMPLATES = (
     TaskTemplate(
@@ -90,6 +98,10 @@ TEMPLATES = (
     ),
 )
 ```
+
+To keep build-time specs separate, put this declaration in a root-level
+`OperatonTemplates.py` and set `specs = "OperatonTemplates:TEMPLATES"` instead.
+List that module in `.wrapignore` so `pur wrap` leaves it out.
 
 ```console
 operaton-contracts generate   # writes .operaton/element-templates/example-greet.json

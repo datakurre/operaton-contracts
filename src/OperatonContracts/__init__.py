@@ -12,8 +12,8 @@ With the ``robot`` extra, the package is also a Robot Framework library:
     Library     OperatonContracts    OperatonTasks
 
     *** Tasks ***
-    Rescind Study Rights
-        ${input}=    Validate Task Input    RescindStudyRightsInput
+    Process Records
+        ${input}=    Validate Task Input    ProcessRecordsInput
 
 The library class is imported lazily, so ``import OperatonContracts`` never
 loads Robot Framework.

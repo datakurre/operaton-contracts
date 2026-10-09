@@ -14,24 +14,24 @@ from pydantic import Field, field_validator
 from OperatonContracts import TaskContract, template_hints
 
 Id = Annotated[str, Field(min_length=1)]
-State = Literal["ACTIVE", "PASSIVE", "RESCINDED"]
+RecordStatus = Literal["PENDING", "ACTIVE", "COMPLETE"]
 
 
-class RescindStudyRightsInput(TaskContract):
-    study_right_ids: list[Id] = Field(
-        alias="studyRightIds",
-        title="Study right IDs",
+class ProcessRecordsInput(TaskContract):
+    record_ids: list[Id] = Field(
+        alias="recordIds",
+        title="Record IDs",
         min_length=1,
-        json_schema_extra=template_hints(value=["${studyRightId}"]),
+        json_schema_extra=template_hints(value=["${recordId}"]),
     )
-    excluded_states: list[State] = Field(
-        alias="excludedStates",
-        title="Excluded states",
+    excluded_statuses: list[RecordStatus] = Field(
+        alias="excludedStatuses",
+        title="Excluded statuses",
         default_factory=list,
-        json_schema_extra=template_hints(value=["RESCINDED"]),
+        json_schema_extra=template_hints(value=["COMPLETE"]),
     )
-    cancellation_date: date = Field(
-        alias="cancellationDate", title="Cancellation date", strict=False
+    effective_date: date = Field(
+        alias="effectiveDate", title="Effective date", strict=False
     )
     dry_run: bool = Field(
         alias="dryRun",
@@ -40,15 +40,15 @@ class RescindStudyRightsInput(TaskContract):
         default=False,
     )
 
-    @field_validator("study_right_ids", mode="before")
+    @field_validator("record_ids", mode="before")
     @classmethod
-    def trim_ids(cls, value: object) -> object:
+    def trim_record_ids(cls, value: object) -> object:
         if isinstance(value, list):
             return [item.strip() for item in value if isinstance(item, str)]
         return value
 
 
-class RescindStudyRightsOutput(TaskContract):
+class ProcessRecordsOutput(TaskContract):
     result: dict[str, Any] = Field(alias="result", title="Result variable")
 ```
 
@@ -82,7 +82,7 @@ template-only information. Unknown keys raise `ValueError`.
 
 | Hint | Effect |
 |---|---|
-| `value` | The template's pre-filled value, e.g. `["${studyRightId}"]` or a default selection |
+| `value` | The template's pre-filled value, e.g. `["${recordId}"]` or a default selection |
 | `type` | Override the template property type: `String`, `Text`, `Hidden`, `Dropdown`, `Boolean`, or `List` |
 
 Without a `value` hint the template uses the schema `default`, then `[]` for

@@ -17,9 +17,9 @@ the running suite.
 
 ```robotframework
 *** Tasks ***
-Rescind Study Rights
-    ${input}=    Validate Task Input    RescindStudyRightsInput
-    ${rows}=    Fetch Study Rights By IDs    ${endpoint}    ${secret}    ${input}[studyRightIds]
+Process Records
+    ${input}=    Validate Task Input    ProcessRecordsInput
+    Log    ${input}[recordIds]
 ```
 
 The keyword reads `${alias}` for every field of the named contract, validates

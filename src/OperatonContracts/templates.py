@@ -235,17 +235,37 @@ def dumps(template: dict[str, Any]) -> str:
 
 
 def validate(paths: Sequence[Path], schema_url: str) -> None:
-    """Validate template files against the pinned upstream schema."""
+    """Validate template files against the pinned upstream schema.
+
+    Raises ``TemplateError`` when there are no templates, ``jsonschema`` (the
+    ``templates`` extra) is missing, the schema cannot be fetched, or a
+    template does not conform.
+    """
     if not paths:
         raise TemplateError("No element templates were found")
-    from jsonschema import Draft7Validator  # the "templates" extra
-
-    with urlopen(schema_url, timeout=30) as response:
-        schema = json.load(response)
+    try:
+        from jsonschema import Draft7Validator
+        from jsonschema import ValidationError
+    except ImportError as error:
+        raise TemplateError(
+            "Schema validation needs jsonschema: install "
+            "operaton-contracts[templates]"
+        ) from error
+    try:
+        with urlopen(schema_url, timeout=30) as response:
+            schema = json.load(response)
+    except (OSError, ValueError) as error:
+        raise TemplateError(f"Cannot load the schema {schema_url}: {error}") from error
     Draft7Validator.check_schema(schema)
     validator = Draft7Validator(schema)
     for path in paths:
-        validator.validate(json.loads(path.read_text(encoding="utf-8")))
+        try:
+            validator.validate(json.loads(path.read_text(encoding="utf-8")))
+        except ValidationError as error:
+            location = "/".join(str(part) for part in error.absolute_path)
+            raise TemplateError(
+                f"{path.name}: {error.message} (at /{location})"
+            ) from error
         print(f"Validated {path.name}")
 
 

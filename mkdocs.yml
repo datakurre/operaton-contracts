@@ -29,6 +29,7 @@ nav:
   - Task contracts: contracts.md
   - Robot tasks: robot.md
   - Element templates: templates.md
+  - Agent skill: skill.md
   - Changelog: changelog.md
 
 markdown_extensions:

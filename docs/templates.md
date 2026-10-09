@@ -8,34 +8,43 @@ compatible bpmn.io modelers.
 
 ```toml title="pyproject.toml"
 [tool.operaton-contracts]
-specs = "scripts.element_templates:TEMPLATES"   # module:attribute, required
-icon = "scripts/logo.svg"                       # SVG embedded in every template
+specs = "OperatonTasks:TEMPLATES"                # module:attribute, required
+icon = "logo.svg"                               # SVG embedded in every template
 reserved-topics = ["legacy.topic"]              # topics owned by other workers
 schema-url = "https://…?job=release"            # pinned schema; has a default
 ```
 
-The specs module is imported with the project root on `sys.path`.
+The specs module and icon path are resolved from the project root. When the
+robot package already uses `OperatonContracts` at runtime for task contracts
+and Robot validation, put the template specs in `OperatonTasks.py` alongside
+the contract models. This adds no package dependency. The `templates` extra is needed only for
+`validate`, which checks templates against the upstream schema. With devenv, provide `jsonschema` through
+`devenv.nix` and keep it out of uv's `dev` group.
 
-```python title="scripts/element_templates.py"
+```python title="OperatonTasks.py"
 from OperatonContracts.templates import TaskTemplate, TemplateGroup
-from OperatonTasks import RescindStudyRightsInput, RescindStudyRightsOutput
 
 TEMPLATES = (
     TaskTemplate(
-        topic="study_rights.rescind",
-        template_id="org.example.study-rights-rescind",  # stable; never reuse
-        name="Rescind Study Rights",
-        description="Rescind active study rights.",
-        filename="study-rights-rescind.json",
-        inputs=RescindStudyRightsInput,
-        outputs=RescindStudyRightsOutput,
-        groups=(TemplateGroup("main", "Rescission"),),
+        topic="records.process",
+        template_id="org.example.records-process",  # stable; never reuse
+        name="Process Records",
+        description="Process selected records.",
+        filename="records-process.json",
+        inputs=ProcessRecordsInput,
+        outputs=ProcessRecordsOutput,
+        groups=(TemplateGroup("main", "Processing"),),
         input_group="main",
         output_group="main",
         version=1,  # bump when bindings change incompatibly
     ),
 )
 ```
+
+Alternatively, keep the specs out of the runtime task module in a root-level
+`OperatonTemplates.py` and set `specs = "OperatonTemplates:TEMPLATES"`. If
+using `pur wrap`, list that module and the root-level icon in `.wrapignore`
+so they stay out of the robot package.
 
 The default groups are `inputs` ("Inputs") and `outputs` ("Results").
 `input_group` and `output_group` must be ids from `groups`; use one id for
@@ -50,8 +59,16 @@ operaton-contracts validate   # against the pinned upstream schema (network)
 ```
 
 All commands accept `--root <dir>` (default: the current directory) and are
-also available as `python -m OperatonContracts`. Configuration errors exit
-with status 2, failed checks with status 1.
+also available as `python -m OperatonContracts`. They exit with status 0 on
+success, 1 when checks or schema validation fail, and 2 for usage or
+configuration errors (a missing or invalid `[tool.operaton-contracts]`
+table, specs module, or icon), always with a message instead of a traceback.
+
+The generated `.operaton/` directory is optional source control state. A robot
+package may add `.operaton/` to `.gitignore`; run `operaton-contracts generate`
+to recreate the templates when the modeler needs them. If CI runs `check` with
+the directory ignored, generate the files first: `check` verifies the on-disk
+templates against the contracts and reports missing or stale files.
 
 ## Generated structure
 
@@ -85,7 +102,7 @@ the target process variable.
 
 ## What `check` verifies
 
-- Committed templates equal the rendered ones (2-space JSON and a final
+- On-disk templates equal the rendered ones (2-space JSON and a final
   newline), and there are no stray `*.json` files.
 - Spec topics equal the keys of `[tool.purjo.topics]`; no topic is reserved;
   ids, filenames, and topics are unique; every topic sets

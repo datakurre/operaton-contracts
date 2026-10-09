@@ -19,6 +19,8 @@ jobs:
         with:
           python-version: "3.12"
       - run: uv sync --group dev
+      - run: uv run black --target-version py312 --check src tests
+      - run: uv run mypy src tests
       - run: uv run pytest
       - name: Check that the tag matches the project version
         run: test "v$(uv version --short)" = "${GITHUB_REF_NAME}"

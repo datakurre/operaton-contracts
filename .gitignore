@@ -1,5 +1,4 @@
 .venv/
-.devenv/
 dist/
 build/
 __pycache__/

@@ -5,6 +5,7 @@ from __future__ import annotations
 import io
 import json
 import runpy
+import shutil
 import sys
 import tempfile
 import unittest
@@ -459,6 +460,32 @@ class PackageCheckTests(unittest.TestCase):
                 ],
             )
 
+    def test_check_treats_empty_and_none_defaults_as_untyped(self) -> None:
+        for value in ("${EMPTY}", "${None}"):
+            with self.subTest(value=value):
+                suite = DEMO_SUITE.replace(
+                    "${dry_run}    ${False}", f"${{dryRun}}    {value}"
+                )
+                with DemoPackage(suite=suite) as package:
+                    self.assertEqual(
+                        check_package(package.root, [DEMO]),
+                        [
+                            f"greet.robot: default of ${{dryRun}} is a string; use "
+                            "a typed default such as ${False}, ${0}, or @{EMPTY}"
+                        ],
+                    )
+
+    def test_check_skips_virtual_environments(self) -> None:
+        with DemoPackage() as package:
+            suite = (package.root / "greet.robot").read_text()
+            for relative in ("x/venv/dup.robot", "env/lib/site-packages/dup.robot"):
+                (package.root / relative).parent.mkdir(parents=True)
+                (package.root / relative).write_text(suite)
+            (package.root / "custom-env").mkdir()
+            (package.root / "custom-env" / "pyvenv.cfg").write_text("")
+            (package.root / "custom-env" / "dup.robot").write_text(suite)
+            self.assertEqual(check_package(package.root, [DEMO]), [])
+
     def test_check_collects_suites_recursively_and_rejects_duplicates(self) -> None:
         with DemoPackage() as package:
             suite = (package.root / "greet.robot").read_text()
@@ -543,10 +570,49 @@ class CommandTests(unittest.TestCase):
             urlopen.assert_called_once_with(SCHEMA_URL, timeout=30)
         self.assertIn("Validated demo-greet.json", stdout.getvalue())
 
-    def test_validate_requires_templates(self) -> None:
+    def test_validate_reports_failures_without_tracebacks(self) -> None:
+        schema = {
+            "$schema": "http://json-schema.org/draft-07/schema",
+            "type": "object",
+            "required": ["missing"],
+        }
         with DemoPackage() as package:
-            with self.assertRaisesRegex(TemplateError, "No element templates"):
-                package.main("validate")
+            cases: list[tuple[Any, str]] = [
+                (None, "No element templates"),
+                (
+                    SchemaResponse(json.dumps(schema).encode()),
+                    "'missing' is a required",
+                ),
+                (OSError("offline"), "Cannot load the schema"),
+                (SchemaResponse(b"not json"), "Cannot load the schema"),
+            ]
+            for response, message in cases:
+                with self.subTest(message=message):
+                    if response is not None:
+                        with redirect_stdout(io.StringIO()):
+                            package.main("generate")
+                    stderr = io.StringIO()
+                    with (
+                        redirect_stderr(stderr),
+                        patch.object(
+                            operaton_templates,
+                            "urlopen",
+                            side_effect=(
+                                response if isinstance(response, OSError) else None
+                            ),
+                            return_value=response,
+                        ),
+                    ):
+                        self.assertEqual(package.main("validate"), 1)
+                    self.assertIn(message, stderr.getvalue())
+
+    def test_validate_explains_the_missing_templates_extra(self) -> None:
+        with DemoPackage() as package, redirect_stdout(io.StringIO()):
+            package.main("generate")
+            stderr = io.StringIO()
+            with redirect_stderr(stderr), patch.dict(sys.modules, {"jsonschema": None}):
+                self.assertEqual(package.main("validate"), 1)
+        self.assertIn("operaton-contracts[templates]", stderr.getvalue())
 
 
 class ContractImportTests(unittest.TestCase):
@@ -612,7 +678,61 @@ class CommandLineTests(unittest.TestCase):
             self.assertEqual(len(lines), 3)
             self.assertTrue(lines[0].endswith("pyproject.toml not found"))
             self.assertIn('specs = "module:ATTRIBUTE"', lines[1])
-            self.assertTrue(lines[2].endswith("must be a sequence of TaskTemplate"))
+            self.assertTrue(
+                lines[2].endswith("must be a non-empty sequence of TaskTemplate")
+            )
+
+    def test_invalid_configuration_values_are_reported(self) -> None:
+        cases = (
+            ('specs = "no_such_specs_module"', "Cannot import the specs module"),
+            ('specs = "cfg_specs:MISSING"', "non-empty sequence"),
+            ('specs = "cfg_specs:EMPTY"', "non-empty sequence"),
+            ('specs = "cfg_specs"\nreserved-topics = "abc"', "reserved-topics"),
+            ('specs = "cfg_specs"\nreserved-topics = [1]', "reserved-topics"),
+            ('specs = "cfg_specs"\nschema-url = 1', "schema-url"),
+            ('specs = "cfg_specs"\nicon = "missing.svg"', "icon 'missing.svg'"),
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "cfg_specs.py").write_text(
+                f"from {__name__} import DEMO\n\nTEMPLATES = (DEMO,)\nEMPTY = ()\n"
+            )
+            for table, message in cases:
+                with self.subTest(table=table):
+                    (root / "pyproject.toml").write_text(
+                        f"[tool.operaton-contracts]\n{table}\n"
+                    )
+                    with self.assertRaisesRegex(cli.ConfigError, message):
+                        cli.load_config(root)
+            sys.modules.pop("cfg_specs", None)
+
+    def test_specs_cached_from_another_root_are_reloaded(self) -> None:
+        roots = []
+        try:
+            for topic in ("first.topic", "second.topic"):
+                directory = tempfile.mkdtemp()
+                roots.append(directory)
+                root = Path(directory)
+                (root / "shared_specs.py").write_text(
+                    f"from dataclasses import replace\nfrom {__name__} import DEMO\n"
+                    f"TEMPLATES = (replace(DEMO, topic={topic!r}),)\n"
+                )
+                (root / "pyproject.toml").write_text(
+                    '[tool.operaton-contracts]\nspecs = "shared_specs"\n'
+                )
+                self.assertEqual(cli.load_config(root).specs[0].topic, topic)
+            # The same root reuses its cached module.
+            self.assertEqual(
+                cli.load_config(Path(roots[1])).specs[0].topic, "second.topic"
+            )
+            sys.modules["shared_specs"].__file__ = None
+            self.assertEqual(
+                cli.load_config(Path(roots[1])).specs[0].topic, "second.topic"
+            )
+        finally:
+            sys.modules.pop("shared_specs", None)
+            for directory in roots:
+                shutil.rmtree(directory)
 
     def test_configuration_defaults(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
