@@ -67,6 +67,10 @@ ENTRY_KEY_TYPES = {
 }
 ENTRY_TEXT_KEYS = ("id", "label", "description", "placeholder")
 CONSTRAINT_KEYS = frozenset({"notEmpty", "minLength", "maxLength", "pattern"})
+# Template hints that apply to output properties.
+OUTPUT_HINT_KEYS = frozenset({"group", "value"})
+# Target process variable names an output value hint may set.
+OUTPUT_NAME = re.compile(r"[^\s${}]+")
 
 
 class TemplateError(ValueError):
@@ -245,17 +249,35 @@ def _entries(alias: str, entries: Any) -> list[dict[str, Any]]:
 
 def _allowed_keys(alias: str, keys: dict[str, Any]) -> list[str] | None:
     """Return the fixed keys a map's key schema allows, or None for any key."""
-    if "const" in keys:
-        return [keys["const"]]
-    if "enum" in keys:
-        return list(keys["enum"])
+    fixed = [keys["const"]] if "const" in keys else keys.get("enum")
+    if fixed is not None and all(isinstance(key, str) for key in fixed):
+        return list(fixed)
     unsupported = sorted(set(keys) - {"type", "pattern", "title", "description"})
-    if unsupported or keys.get("type", "string") != "string":
+    if fixed is not None or unsupported or keys.get("type", "string") != "string":
         raise TemplateError(
             f"{alias}: unsupported map key schema {keys!r}; use str, "
             "Literal, an Enum of strings, or a key pattern"
         )
     return None
+
+
+def _check_dropdown_entry(
+    alias: str, entry: dict[str, Any], value_choices: Sequence[Any]
+) -> None:
+    """Keep a Dropdown entry's choices and default within the contract values."""
+    choice_values = [choice["value"] for choice in entry["choices"]]
+    outside = [value for value in choice_values if value not in value_choices]
+    if value_choices and outside:
+        raise TemplateError(
+            f"{alias}: choices {', '.join(map(repr, outside))} of entry "
+            f"{entry['key']!r} are not contract values "
+            f"{', '.join(map(str, value_choices))}"
+        )
+    if "value" in entry and entry["value"] not in choice_values:
+        raise TemplateError(
+            f"{alias}: value {entry['value']!r} of entry {entry['key']!r} is not "
+            "one of its choices"
+        )
 
 
 def _map_property(
@@ -300,6 +322,8 @@ def _map_property(
                 )
             entry["type"] = "Dropdown"
             entry.setdefault("choices", _choices(map(str, value_choices)))
+        if entry.get("type") == "Dropdown":
+            _check_dropdown_entry(alias, entry, value_choices)
 
     # Map constraints apply to every value; keyPattern to user-added keys.
     constraints: dict[str, Any] = {}
@@ -374,10 +398,7 @@ def _input_property(
         raise TemplateError(f"{alias}: a Dropdown needs Literal choices")
     if "entries" in hints and prop["type"] != "Map":
         raise TemplateError(f"{alias}: entries need a Map property")
-    if "group" in hints:
-        if hints["group"] not in group_ids:
-            raise TemplateError(f"{alias}: unknown group id {hints['group']!r}")
-        group = hints["group"]
+    group = _group(alias, hints, group, group_ids)
 
     if prop["type"] == "Map":
         entries = _map_property(alias, schema, hints)
@@ -417,16 +438,45 @@ def _describe(schema: dict[str, Any]) -> str:
     return ", ".join(f"{key}={schema[key]!r}" for key in keys) or "without a type"
 
 
-def _output_property(alias: str, schema: dict[str, Any], group: str) -> dict[str, Any]:
-    if TEMPLATE_KEY in schema:
-        raise TemplateError(f"{alias}: template hints apply only to inputs")
+def _group(
+    alias: str, hints: dict[str, Any], group: str, group_ids: Sequence[str]
+) -> str:
+    """Return the ``group`` hint, checked against the spec's groups, or ``group``."""
+    if "group" not in hints:
+        return group
+    if hints["group"] not in group_ids:
+        raise TemplateError(f"{alias}: unknown group id {hints['group']!r}")
+    return str(hints["group"])
+
+
+def _output_property(
+    alias: str, schema: dict[str, Any], group: str, group_ids: Sequence[str]
+) -> dict[str, Any]:
+    hints: dict[str, Any] = schema.get(TEMPLATE_KEY, {})
+    unsupported = sorted(set(hints) - OUTPUT_HINT_KEYS)
+    if unsupported:
+        raise TemplateError(
+            f"{alias}: output hints may only set {', '.join(sorted(OUTPUT_HINT_KEYS))}, "
+            f"not {', '.join(unsupported)}"
+        )
+    value = hints.get("value", alias)
+    if "value" in hints and not (
+        isinstance(value, str) and (not value or OUTPUT_NAME.fullmatch(value))
+    ):
+        raise TemplateError(
+            f"{alias}: output value {value!r} must be a process variable name "
+            "(no spaces, $, {, or }) or empty"
+        )
+    group = _group(alias, hints, group, group_ids)
     prop: dict[str, Any] = {"label": schema["title"]}
     if "description" in schema:
         prop["description"] = schema["description"]
+    prop.update({"type": "String", "value": value})
+    if not value:
+        # Without a target variable name the output mapping is not written.
+        prop["optional"] = True
     prop.update(
         {
-            "type": "String",
-            "value": alias,
             "group": group,
             "binding": {"type": "camunda:outputParameter", "source": f"${{{alias}}}"},
         }
@@ -460,10 +510,18 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
         _input_property(alias, schema, required, spec.input_group, group_ids)
         for alias, schema, required in contract_properties(spec.inputs)
     )
-    properties.extend(
-        _output_property(alias, schema, spec.output_group)
+    outputs = [
+        _output_property(alias, schema, spec.output_group, group_ids)
         for alias, schema, _required in contract_properties(spec.outputs)
-    )
+    ]
+    targets = [output["value"] for output in outputs if output["value"]]
+    repeated = sorted({target for target in targets if targets.count(target) > 1})
+    if repeated:
+        raise TemplateError(
+            f"{spec.topic}: outputs map to the same process variable "
+            f"{', '.join(map(repr, repeated))}; give each a distinct value hint"
+        )
+    properties.extend(outputs)
     icon = base64.b64encode(icon_svg).decode("ascii")
     return {
         "$schema": schema_url,

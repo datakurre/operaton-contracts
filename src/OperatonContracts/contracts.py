@@ -41,8 +41,10 @@ def template_hints(**hints: JsonValue) -> dict[str, JsonValue]:
     template property type inferred from the JSON Schema; ``group`` places the
     property in another of the template's groups; ``entries`` lists the fixed
     keys of a ``Map`` property as element-template entry objects (``key``
-    plus optional ``label``, ``type``, ``value``, …). Required string and map
-    properties and non-empty strings, lists, or maps get ``notEmpty``.
+    plus optional ``label``, ``type``, ``value``, …). Required strings and
+    non-empty strings or lists get ``notEmpty``; a Map's constraints come from
+    its value schema. Outputs accept only ``value`` (the target variable;
+    ``""`` writes no mapping unless a modeler user names one) and ``group``.
     """
     unknown = sorted(set(hints) - HINT_KEYS)
     if unknown:

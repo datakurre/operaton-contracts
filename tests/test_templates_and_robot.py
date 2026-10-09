@@ -15,6 +15,7 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 from enum import Enum
+from enum import IntEnum
 from typing import Annotated
 from typing import Any
 from typing import Literal
@@ -572,6 +573,9 @@ class ElementTemplateRenderTests(unittest.TestCase):
         )
 
     def test_render_rejects_map_shapes_and_entries_the_schema_rejects(self) -> None:
+        class IntKey(IntEnum):
+            ONE = 1
+
         def contract(annotation: Any, **hints: Any) -> type[TaskContract]:
             return create_model(
                 "MapContract",
@@ -610,6 +614,38 @@ class ElementTemplateRenderTests(unittest.TestCase):
                 ),
                 "must be a Dropdown",
             ),
+            (
+                contract(
+                    dict[Literal["a"], Literal["x", "y"]],
+                    entries=[{"key": "a", "value": "z"}],
+                ),
+                "value 'z' of entry 'a' is not one of its choices",
+            ),
+            (
+                contract(
+                    dict[Literal["a"], Literal["x", "y"]],
+                    entries=[
+                        {
+                            "key": "a",
+                            "type": "Dropdown",
+                            "choices": [
+                                {"name": "X", "value": "x"},
+                                {"name": "Z", "value": "z"},
+                            ],
+                        }
+                    ],
+                ),
+                "choices 'z' of entry 'a' are not contract values x, y",
+            ),
+            (
+                entry(
+                    type="Dropdown",
+                    choices=[{"name": "A", "value": "a"}],
+                    value="b",
+                ),
+                "value 'b' of entry 'a' is not one of its choices",
+            ),
+            (contract(dict[IntKey, str]), "unsupported map key schema"),
             (entry(key=""), "must not be empty"),
             (entry(value=5), "must be a str"),
             (entry(type="Boolean", value="true"), "must be a bool"),
@@ -634,16 +670,102 @@ class ElementTemplateRenderTests(unittest.TestCase):
                 with self.assertRaisesRegex(TemplateError, message):
                     render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
 
-    def test_render_rejects_template_hints_on_outputs(self) -> None:
+    def test_output_hints_rename_skip_or_regroup_mappings(self) -> None:
         class HintedOutput(TaskContract):
-            value: str = Field(
-                alias="value",
-                title="Value",
-                json_schema_extra=template_hints(group="outputs"),
+            skipped: str = Field(
+                alias="skipped",
+                title="Skipped",
+                json_schema_extra=template_hints(value=""),
+            )
+            renamed: str = Field(
+                alias="renamed",
+                title="Renamed",
+                json_schema_extra=template_hints(value="target", group="inputs"),
             )
 
         spec = TaskTemplate(**{**DEMO.__dict__, "outputs": HintedOutput})
-        with self.assertRaisesRegex(TemplateError, "apply only to inputs"):
+        template = render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+        self.assertEqual(
+            template["properties"][-2:],
+            [
+                {
+                    "label": "Skipped",
+                    "type": "String",
+                    "value": "",
+                    "optional": True,
+                    "group": "outputs",
+                    "binding": {
+                        "type": "camunda:outputParameter",
+                        "source": "${skipped}",
+                    },
+                },
+                {
+                    "label": "Renamed",
+                    "type": "String",
+                    "value": "target",
+                    "group": "inputs",
+                    "binding": {
+                        "type": "camunda:outputParameter",
+                        "source": "${renamed}",
+                    },
+                },
+            ],
+        )
+        validator = Draft7Validator(json.loads(UPSTREAM_SCHEMA.read_text()))
+        self.assertEqual(
+            [error.message for error in validator.iter_errors(template)], []
+        )
+
+    def test_render_rejects_unsupported_output_hints(self) -> None:
+        def output(**hints: Any) -> type[TaskContract]:
+            return create_model(
+                "HintedOutput",
+                __base__=TaskContract,
+                value=(
+                    str,
+                    Field(
+                        alias="value",
+                        title="Value",
+                        json_schema_extra=template_hints(**hints),
+                    ),
+                ),
+            )
+
+        for model, message in (
+            (output(type="Text"), "may only set group, value, not type"),
+            (output(value=["x"]), "must be a process variable name"),
+            (output(value="${expr}"), "'\\$\\{expr\\}' must be a process variable"),
+            (output(value="has space"), "'has space' must be a process variable"),
+            (output(group="missing"), "unknown group id 'missing'"),
+        ):
+            spec = TaskTemplate(**{**DEMO.__dict__, "outputs": model})
+            with self.subTest(message=message):
+                with self.assertRaisesRegex(TemplateError, message):
+                    render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
+
+    def test_render_rejects_outputs_mapped_to_the_same_variable(self) -> None:
+        class CollidingOutput(TaskContract):
+            first: str = Field(
+                alias="first",
+                title="First",
+                json_schema_extra=template_hints(value="second"),
+            )
+            second: str = Field(alias="second", title="Second")
+            skipped: str = Field(
+                alias="skipped",
+                title="Skipped",
+                json_schema_extra=template_hints(value=""),
+            )
+            also_skipped: str = Field(
+                alias="alsoSkipped",
+                title="Also skipped",
+                json_schema_extra=template_hints(value=""),
+            )
+
+        spec = TaskTemplate(**{**DEMO.__dict__, "outputs": CollidingOutput})
+        with self.assertRaisesRegex(
+            TemplateError, "outputs map to the same process variable 'second'"
+        ):
             render(spec, icon_svg=b"", schema_url=SCHEMA_URL)
 
     def test_map_schemas_need_one_string_value_schema(self) -> None:

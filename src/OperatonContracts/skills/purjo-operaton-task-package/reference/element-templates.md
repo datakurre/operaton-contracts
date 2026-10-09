@@ -90,18 +90,23 @@ groups, properties, icon`. Properties start with Hidden
   `notEmpty`, plus value `min_length`/`max_length`/`pattern`; a key pattern →
   `keyPattern`. Required does not add `notEmpty`; set
   `"constraints": {"notEmpty": true}` per entry instead.
-- `Literal` map values turn entries into Dropdowns and need fixed keys.
+- `Literal` map values turn entries into Dropdowns and need fixed keys;
+  hinted `choices` must be among them, and a Dropdown entry's `value` must
+  be one of its choices. Map keys must be strings.
 - `group` hints move one input into another of the spec's `groups`.
 - `constraints.notEmpty` (non-Map): `minLength ≥ 1`, `minItems ≥ 1`, or a
   required `String` property.
-- Hints on output fields are rejected.
 - `binding`: `{"type": "camunda:inputParameter", "name": alias}`.
 
 ## Output mapping
 
 `String` property with `value: alias` and
 `binding: {"type": "camunda:outputParameter", "source": "${alias}"}`; the
-modeler user may rename the target process variable.
+modeler user may rename the target process variable. Outputs accept only
+`template_hints(value=..., group=...)`: `value="name"` changes the default
+target, and `value=""` adds `optional: true` so no mapping is written unless
+the modeler user names a variable. Hinted names may not contain whitespace,
+`$`, `{`, or `}`, and no two outputs may map to the same variable.
 
 ## Hints
 

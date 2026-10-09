@@ -98,7 +98,9 @@ entries; any other string map lets modeler users add their own keys
 (`additionalEntries`). A Map takes no value: use `default_factory=dict` or
 `= {}`. See [Map inputs](templates.md#map-inputs) for constraints.
 
-Hints apply only to input contracts; output fields with hints are rejected.
+Output fields accept only the `value` and `group` hints: `value` names the
+default target process variable, and `value=""` maps nothing unless a
+modeler user names one. Two outputs may not map to the same variable.
 
 ## Values from Operaton
 

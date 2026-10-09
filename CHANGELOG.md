@@ -1,6 +1,17 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
+
+Breaking: existing projects may need changes before `generate` or `check`
+passes again.
+
+- `TaskTemplate.version` must be an integer of at least 1.
+- Template hints on output fields were ignored before; now `value` and
+  `group` take effect and any other hint is rejected.
+- `check` rejects scalar suite defaults for array and object inputs; use
+  `@{EMPTY}` or `&{EMPTY}`.
+
+Changes:
 
 - `dict[str, str]` inputs render as `Map` element-template properties. The
   new `entries` hint fixes their keys (with labels, entry types, and
@@ -8,7 +19,8 @@
   `Literal` or string `Enum` keys become the entries, or modeler users may
   add keys. Value length and pattern constraints become Map `constraints`,
   key patterns become `keyPattern`, and `Literal` values become Dropdown
-  entries.
+  entries. A Dropdown entry's default must be one of its choices, and its
+  choices must be contract values. Map keys must be strings.
 - The new `group` hint places an input in another of the spec's groups.
 - `TaskTemplate.icon` embeds a per-template SVG instead of the configured
   `icon`; `Config.icons` holds the loaded files and `render_all` accepts them
@@ -19,7 +31,11 @@
   versions that would be dropped and changed versions that need a bump.
   `render_all` takes `template_dir=` to read them. `version` must be an
   integer of at least 1.
-- Template hints on output fields are rejected.
+- Output fields accept the `value` and `group` hints; `value=""` renders an
+  optional, empty output mapping that is not written unless a modeler user
+  names a variable. Other hints on outputs are rejected, as are hinted
+  names with whitespace, `$`, `{`, or `}` and outputs mapped to the same
+  variable.
 - `check` requires list (`@`) defaults for array inputs and dictionary (`&`)
   defaults for object inputs, and suggests `&{EMPTY}`.
 

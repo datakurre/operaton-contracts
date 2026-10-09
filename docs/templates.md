@@ -154,7 +154,9 @@ A `dict[str, str]` input renders as a `Map`, bound as a
   rejected. Being required does not add `notEmpty`; to require an entry's
   value, put `"constraints": {"notEmpty": true}` in that entry.
 - `Literal` value choices (`dict[Literal["a"], Literal["x", "y"]]`) make each
-  entry a `Dropdown`; they need fixed keys.
+  entry a `Dropdown`; they need fixed keys. Hinted `choices` must be among
+  those values, and a Dropdown entry's `value` must be one of its choices.
+- Keys must be strings: integer `Enum` keys are rejected.
 - A Map takes no value: use `default_factory=dict` or `= {}`, and pre-fill
   entries with `value` in the `entries` hint.
 - Entries are checked against the element-template schema's entry rules:
@@ -166,10 +168,16 @@ A `dict[str, str]` input renders as a `Map`, bound as a
 
 ### Outputs
 
-Template hints are not allowed on outputs. Each output is a `String`
-property whose value is the alias, bound as a
-`camunda:outputParameter` with `source = "${alias}"`. Modeler users may rename
-the target process variable.
+Each output is a `String` property bound as a `camunda:outputParameter`
+with `source = "${alias}"`. Its value, the target process variable, is the
+alias; modeler users may rename it.
+
+Outputs accept only the `value` and `group` hints. `value="other"` changes
+the default target variable. `value=""` leaves the target empty and adds
+`"optional": true`, so the output mapping is not written unless a modeler
+user names a variable; the worker's value is then not mapped to any process
+variable. A hinted name may not contain whitespace, `$`, `{`, or `}`, and
+two outputs may not map to the same variable.
 
 ## What `check` verifies
 
