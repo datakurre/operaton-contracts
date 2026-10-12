@@ -35,6 +35,9 @@ Framework, use `validate_input` and `validate_output` directly. The
 provide development tools and `jsonschema` through `devenv.nix` instead of
 duplicating them in uv's `dev` group.
 
+New to purjo and `operaton-contracts`? The [tutorial](tutorial.md) builds
+one task from an empty directory to a running Operaton process.
+
 To teach coding agents these conventions, install the bundled
 [agent skill](skill.md): `uv run operaton-contracts install-skill`.
 

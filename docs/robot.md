@@ -27,6 +27,22 @@ the values, and returns a dictionary keyed by alias. The values are
 JSON-compatible: dates become `YYYY-MM-DD` strings. Variables that are not set
 are left out, so the contract defaults apply.
 
+Invalid input fails the task with a message whose first line is
+`InvalidTaskInput`, followed by the contract name and one line per invalid
+variable:
+
+```text
+InvalidTaskInput
+GreetInput:
+name: String should have at least 1 character (got '   ')
+```
+
+purjo uses the first line of a failure as the BPMN `errorCode`, so with
+`on-fail = "ERROR"` an error boundary event with code `InvalidTaskInput`
+catches invalid input, provided the task has set its outputs first (see
+[Outputs](#outputs)). [When input is invalid](tutorial.md#when-input-is-invalid)
+describes the other `on-fail` modes.
+
 Use `${input}[alias]` after validation, never the raw variable. Type checks,
 trimming, deduplication, and non-empty checks belong in the contract instead
 of `Should Be True    isinstance(...)` steps.
@@ -55,13 +71,26 @@ For manual runs, pass typed variables: `robot -v "dryRun: bool:true" …`.
 
 ## Outputs
 
-Set every contract output with task scope:
+Set every contract output with task scope, first to `${None}` before
+anything can fail, then to its value:
 
 ```robotframework
-VAR    ${result}=    ${apiResult}    scope=${BPMN:TASK}
+Process Records
+    VAR    ${result}=    ${None}    scope=${BPMN:TASK}
+    ${input}=    Validate Task Input    ProcessRecordsInput
+    …
+    VAR    ${result}=    ${apiResult}    scope=${BPMN:TASK}
 ```
 
 and declare `${BPMN:TASK}    local` so the suite also runs outside purjo.
+
+The engine evaluates a task's output mappings before a BPMN error reaches its
+boundary event. A template maps each output from `${alias}`, so an output the
+failed task never set makes the error propagation fail with an incident
+(`ENGINE-13033`). With the outputs set first, purjo (1.0rc2 or newer) stores
+them as local variables of the failed task, the mappings resolve (to `null`,
+or to the value set before a later step failed),
+and the boundary event is reached.
 
 ## Testing tasks
 

@@ -11,3 +11,4 @@ log.html
 report.html
 .devenv*
 site/
+.operaton/

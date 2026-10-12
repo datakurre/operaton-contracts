@@ -1,5 +1,69 @@
 # Changelog
 
+## 0.5.0
+
+Breaking: existing projects may need changes before `check` passes again or
+error handling keeps working.
+
+- `Validate Task Input` fails with `InvalidTaskInput` instead of a pydantic
+  `ValidationError`. The message starts with the line `InvalidTaskInput`,
+  which purjo uses as the BPMN `errorCode`, followed by the contract name and
+  one `alias: problem (got value)` line per invalid variable. Error boundary
+  events that matched the old `ValidationError: …` code need the new one.
+- `check` no longer counts a `VAR ${x}=    ${None}    scope=${BPMN:TASK}`
+  placeholder as setting output `x`: a task must also set its real value.
+
+Changes:
+
+- The agent skill and docs set every output to `${None}` with task scope
+  before `Validate Task Input`: Operaton evaluates output mappings before a
+  BPMN error reaches its boundary event, so outputs must exist even when the
+  task fails. This needs purjo 1.0rc2 or newer, which stores them for tasks
+  that end with a BPMN error.
+- Input properties take every feature the element-template schema offers
+  external tasks, through new `template_hints` keys: `value=None`,
+  `placeholder`, `optional`, `editable`, `constraints` (`notEmpty`,
+  `minLength`, `maxLength`, `pattern`, `minItems`, `maxItems`, `keyPattern`,
+  with messages), `choices` (labels, or choices for plain `str` and
+  `list[str]` fields), `display`, `item_type="Date"`, `condition` (the
+  referenced input gets an `id`), `script_format`, and `additional_entries`
+  for a Map with fixed entries.
+- Output properties accept the `optional`, `source`, `script_format`,
+  `condition`, and `editable` hints.
+- `TaskTemplate.additional_inputs` takes an `AdditionalInputs` and renders a
+  Map bound to `camunda:additionalInputParameters`, with `mirrorOutputs`,
+  for inputs that modeler users name themselves.
+- `TaskTemplate.settings` takes `TaskSetting` objects and renders the engine
+  settings `asyncBefore`, `asyncAfter`, `exclusive`, `jobPriority`, and
+  `taskPriority` as properties that modeler users may adjust, or as fixed
+  hidden values.
+- `TaskTemplate.errors` takes `ErrorDefinition` objects and renders
+  `camunda:errorEventDefinition` properties with their `bpmn:Error` scopes,
+  so the engine throws a BPMN error when an expression over the worker's
+  result holds.
+- `TaskTemplate(groups=())` renders a template without groups.
+- Templates that use none of the new hints render exactly as before, with
+  these exceptions, which rendered templates the schema rejects:
+  a `type` hint of `String`, `Text`, or `Hidden` on a `Literal` field no
+  longer keeps `choices`, and on a list field no longer keeps `display`,
+  `choices`, or `itemType`.
+- A `condition` in a Map entry is now checked like any other: it needs a
+  `property` and one of `equals`, `oneOf`, or `isActive`, and its `property`
+  must be an input alias (which then gets an `id`) or an entry `id`.
+- `check` does not ask a task to set an output that has a `source` hint.
+- A breaking change can move a task to a new topic while the earlier version
+  stays served: `check` accepts a topic that only a kept template version
+  uses, and requires it to stay in `[tool.purjo.topics]` with
+  `process-variables = false` and a defined Robot task.
+  `check_package` takes `template_dir=` for this, and
+  `templates.kept_topics` lists such topics. The new "Versioning tasks"
+  documentation describes the naming convention.
+- `check` messages for a topic without a template spec, or a spec without a
+  topic, say how to fix them.
+- New tutorial page: a Greet task from `pur init` to a running Operaton
+  process, with the values the engine sends and how invalid input surfaces,
+  verified against Operaton 2.1.5 and purjo 1.0rc2.
+
 ## 0.4.0
 
 - `TaskTemplate.element_type` selects the BPMN element a template applies

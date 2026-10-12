@@ -45,11 +45,17 @@ default only pre-fills the template. For manual runs pass typed variables:
 
 ## Inputs
 
-The first step of every task validates and normalizes its inputs:
+After pre-setting the outputs (see [Outputs](#outputs)), the first step of
+every task validates and normalizes its inputs:
 
 ```robotframework
 ${input}=    Validate Task Input    RescindStudyRightsInput
 ```
+
+Invalid input fails with a message whose first line is `InvalidTaskInput`,
+then one `alias: problem (got value)` line per variable. purjo uses the first
+line as the BPMN `errorCode`, so with `on-fail = "ERROR"` an error boundary
+event with code `InvalidTaskInput` catches it.
 
 Afterwards use `${input}[alias]`, never the raw `${alias}`. Type checks, ID
 trimming and deduplication, and non-empty checks belong in the contract, not
@@ -59,11 +65,24 @@ topic's input contract.
 ## Outputs
 
 ```robotframework
-VAR    ${studyRights}=    ${studyRights}    scope=${BPMN:TASK}
+Get Current Study Rights
+    VAR    ${studyRights}=    ${None}    scope=${BPMN:TASK}
+    ${input}=    Validate Task Input    GetCurrentStudyRightsInput
+    …
+    VAR    ${studyRights}=    ${rows}    scope=${BPMN:TASK}
 ```
 
 purjo returns variables set with `scope=${BPMN:TASK}`. By convention set them
-in the task body, where `check` enforces one `VAR` per contract output alias.
+in the task body, where `check` enforces a `VAR` with a real value per
+contract output alias; the `${None}` placeholder does not count.
+
+Set every output to `${None}` as the task's first step. Operaton evaluates
+the template's output mappings (`${alias}`) before a BPMN error reaches its
+boundary event; an output the failed task never set makes propagation fail
+with `ENGINE-13033` and an incident. purjo 1.0rc2+ stores the task-scope
+variables of a failed task as local variables, so the pre-set outputs map
+to `null` (or to the value set before a later step failed) and the
+boundary event is reached.
 
 ## Read tasks
 
@@ -74,6 +93,7 @@ rows, and returns JSON-ready dicts; set the output.
 
 ```robotframework
 Rescind Study Rights
+    VAR    ${result}=    ${None}    scope=${BPMN:TASK}
     ${input}=    Validate Task Input    RescindStudyRightsInput   # bool dryRun, clean non-empty IDs
     ${rows}=    Fetch Study Rights By IDs    ${endpoint}    ${secret}    ${input}[studyRightIds]
     @{returnedIds}=    Create List

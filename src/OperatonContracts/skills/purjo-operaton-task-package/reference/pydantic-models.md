@@ -83,6 +83,7 @@ Library     OperatonContracts    OperatonTasks
 
 *** Tasks ***
 Rescind Study Rights
+    VAR    ${result}=    ${None}    scope=${BPMN:TASK}
     ${input}=    Validate Task Input    RescindStudyRightsInput
     ...    ${input}[studyRightIds]
 ```

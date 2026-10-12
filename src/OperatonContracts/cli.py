@@ -224,7 +224,10 @@ def main(argv: Sequence[str] | None = None) -> int:
         return 0
 
     errors = check_package(
-        config.root, config.specs, reserved_topics=config.reserved_topics
+        config.root,
+        config.specs,
+        reserved_topics=config.reserved_topics,
+        template_dir=config.template_dir,
     )
     errors.extend(drift(config.template_dir, rendered))
     for message in errors:

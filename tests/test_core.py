@@ -192,7 +192,11 @@ class WithoutRobotTests(unittest.TestCase):
                 (root / "pyproject.toml").write_text("")
                 self.assertEqual(
                     check_package(root, [ORDER]),
-                    ["Topic missing from [tool.purjo.topics]: orders.ship"],
+                    [
+                        "Topic missing from [tool.purjo.topics]: orders.ship "
+                        '(add [tool.purjo.topics."orders.ship"] with the Robot '
+                        "task name)"
+                    ],
                 )
 
 
