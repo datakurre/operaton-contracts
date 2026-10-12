@@ -1327,6 +1327,39 @@ def _kept_templates(spec: TaskTemplate, template_dir: Path) -> list[dict[str, An
     return kept
 
 
+def _template_topic(template: dict[str, Any]) -> str | None:
+    """Return the external task topic a rendered template sets, if any."""
+    properties = template.get("properties")
+    for prop in properties if isinstance(properties, list) else ():
+        binding = prop.get("binding") if isinstance(prop, dict) else None
+        if isinstance(binding, dict) and binding.get("name") == "camunda:topic":
+            value = prop.get("value")
+            return value if isinstance(value, str) and value else None
+    return None
+
+
+def kept_topics(specs: Sequence[TaskTemplate], template_dir: Path) -> dict[str, str]:
+    """Return the topics that only kept template versions use.
+
+    A kept version may name another topic than its spec does now, when a
+    breaking change moved the task to a new topic. Diagrams modeled with that
+    version still use the old topic, so a worker has to keep serving it. Maps
+    each such topic to a description of the version, for messages.
+    """
+    current = {spec.topic for spec in specs}
+    topics: dict[str, str] = {}
+    for spec in specs:
+        if not spec.keep_versions:
+            continue
+        for template in _kept_templates(spec, template_dir):
+            topic = _template_topic(template)
+            if topic is not None and topic not in current:
+                topics.setdefault(
+                    topic, f"version {template['version']} of {spec.template_id}"
+                )
+    return topics
+
+
 def render_all(
     specs: Sequence[TaskTemplate],
     *,

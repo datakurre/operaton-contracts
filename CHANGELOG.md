@@ -51,6 +51,13 @@ Changes:
   `property` and one of `equals`, `oneOf`, or `isActive`, and its `property`
   must be an input alias (which then gets an `id`) or an entry `id`.
 - `check` does not ask a task to set an output that has a `source` hint.
+- A breaking change can move a task to a new topic while the earlier version
+  stays served: `check` accepts a topic that only a kept template version
+  uses, and requires it to stay in `[tool.purjo.topics]` with
+  `process-variables = false` and a defined Robot task.
+  `check_package` takes `template_dir=` for this, and
+  `templates.kept_topics` lists such topics. The new "Versioning tasks"
+  documentation describes the naming convention.
 - `check` messages for a topic without a template spec, or a spec without a
   topic, say how to fix them.
 - New tutorial page: a Greet task from `pur init` to a running Operaton

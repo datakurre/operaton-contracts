@@ -89,7 +89,9 @@ TaskTemplate(..., version=4, keep_versions=(2, 3))
 ```
 
 - Bump `version` whenever a published template changes; until then, keep
-  regenerating the same version.
+  regenerating the same version. When the change breaks diagrams that use
+  the earlier version, also move the task to a new topic; see
+  [Versioning tasks](#versioning-tasks).
 - `generate` renders the current version from the contracts and copies each
   kept version unchanged from the existing file (matched by `id` and
   `version`), writing a JSON list, newest first. Without `keep_versions` the
@@ -112,6 +114,104 @@ TaskTemplate(..., version=4, keep_versions=(2, 3))
   `generate`.
 - Kept versions are copied as they were, so they may differ in anything,
   including `appliesTo`.
+
+## Versioning tasks
+
+A template version and the task behind it change together. The engine,
+though, keeps running diagrams that were modeled with an earlier version:
+they still send the old inputs and expect the old outputs. Two kinds of
+change follow from that.
+
+**A compatible change** keeps every deployed diagram working: a new input
+with a contract default, another output, or a new label, description, choice
+label, or constraint. Bump `version` and keep the topic. One Robot task
+serves all versions.
+
+**A breaking change** would fail diagrams that use the old version: a new
+required input, a removed or renamed input or output, or a changed type.
+Give the new version its own topic, and keep serving the old one:
+
+1. Keep the old contract and Robot task under versioned names.
+2. Change the current contract and task.
+3. Move the spec to a new topic, bump `version`, and list the old version in
+   `keep_versions`.
+4. Serve both topics.
+
+No new mechanism is needed, only a naming convention. The first version
+keeps its plain topic, because it is already published; later breaking
+versions append `.v<N>`:
+
+| | Current version | Earlier version |
+|---|---|---|
+| Topic | `example.greet.v2` | `example.greet` |
+| Robot task | `Greet` | `Greet V1` |
+| Input contract | `GreetInput` | `GreetInputV1` |
+
+```python title="OperatonTasks.py"
+class GreetInputV1(TaskContract):
+    name: str = Field(alias="name", title="Name", min_length=1)
+
+
+class GreetInput(TaskContract):
+    name: str = Field(alias="name", title="Name", min_length=1)
+    language: Literal["en", "fi"] = Field(alias="language", title="Language")
+
+
+TEMPLATES = (
+    TaskTemplate(
+        topic="example.greet.v2",          # was "example.greet"
+        template_id="org.example.greet",   # unchanged
+        ...,
+        inputs=GreetInput,
+        outputs=GreetOutput,
+        version=2,
+        keep_versions=(1,),
+    ),
+)
+```
+
+```toml title="pyproject.toml"
+[tool.purjo.topics."example.greet"]       # diagrams on version 1
+name = "Greet V1"
+process-variables = false
+
+[tool.purjo.topics."example.greet.v2"]    # diagrams on version 2
+name = "Greet"
+process-variables = false
+```
+
+```robotframework title="greet.robot"
+*** Tasks ***
+Greet V1
+    VAR    ${greeting}=    ${None}    scope=${BPMN:TASK}
+    ${input}=    Validate Task Input    GreetInputV1
+    VAR    ${greeting}=    Hello ${input}[name]    scope=${BPMN:TASK}
+
+Greet
+    VAR    ${greeting}=    ${None}    scope=${BPMN:TASK}
+    ${input}=    Validate Task Input    GreetInput
+    VAR    ${greeting}=    Hello ${input}[name] (${input}[language])    scope=${BPMN:TASK}
+```
+
+`generate` then writes both versions into the one template file: version 2
+with the new topic and inputs, and version 1 copied unchanged with the old
+topic. Deployed diagrams keep running `Greet V1`. The modeler resolves both
+versions from the file, and updating a diagram's template to version 2
+applies the new topic together with the new inputs.
+
+`check` reads the topic of every kept version from the template file. Such
+a topic needs no spec of its own, but it must still be in
+`[tool.purjo.topics]` with `process-variables = false`, and a suite must
+define its task; otherwise old diagrams would wait for a worker that no
+longer exists. `check` cannot compare the old task with the old contract,
+because a kept version is only the committed JSON: keep a test for the old
+task while you serve it.
+
+To retire a version, first make sure nothing uses its topic: no deployed
+process definition refers to it, and the engine lists no external tasks for
+it (`GET /engine-rest/external-task?topicName=example.greet`). Then remove
+it from `keep_versions`, delete its topic, task, and contract, and run
+`generate`.
 
 ## Element types
 
@@ -430,6 +530,9 @@ TaskTemplate(
 - Spec topics equal the keys of `[tool.purjo.topics]`; no topic is reserved;
   ids, filenames, and topics are unique; every topic sets
   `process-variables = false`.
+- A topic that only a kept template version uses is also a key of
+  `[tool.purjo.topics]`, with `process-variables = false` and a task that
+  exactly one suite defines; see [Versioning tasks](#versioning-tasks).
 - Exactly one suite defines each topic's task. Suites are collected
   recursively, skipping hidden directories, `tests/`, `lib/`, `examples/`, and
   `test_*.robot`. Task, keyword, and variable names are matched the way Robot

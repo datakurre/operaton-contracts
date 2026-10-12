@@ -147,6 +147,24 @@ Properties start with Hidden `camunda:type = external` and
   error `code` instead of completing the task, so a successful Robot task
   can still raise a business error that a boundary event catches.
 
+## Versioning a published task
+
+- Compatible change (new input with a default, new output, labels,
+  constraints): bump `version`, keep the topic and the Robot task.
+- Breaking change (new required input, removed or renamed input or output,
+  changed type): keep the old contract and task as `<Name>InputV<N>` and
+  `<Task Name> V<N>`, change the current ones, move the spec to
+  `topic="<topic>.v<N+1>"` with `version=N+1` and `keep_versions=(..., N)`,
+  and keep the old topic in `[tool.purjo.topics]` pointing at the old task.
+  The first version keeps its plain topic.
+- `check` accepts a topic that only a kept version uses, and requires it to
+  stay in `[tool.purjo.topics]` with `process-variables = false` and a
+  defined task. Keep a test for the old task; `check` cannot compare it
+  with the old contract.
+- Retire a version only when no deployed definition or external task uses
+  its topic: drop it from `keep_versions`, remove the topic, task, and
+  contract, and regenerate.
+
 ## Output mapping
 
 `String` property with `value: alias` and

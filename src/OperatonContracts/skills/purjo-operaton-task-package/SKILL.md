@@ -91,6 +91,15 @@ with `VAR … scope=${BPMN:TASK}`.
 9. **Verify**: `<run> make format check test check-element-templates`.
 10. **Docs**: update the AGENTS.md topic table and repository map.
 
+## Workflow: change a published topic
+
+A change that keeps deployed diagrams working (a new input with a default,
+labels, constraints) needs only a `version` bump. A breaking change (a new
+required input, a removed or renamed input or output, a changed type) gets a
+new topic `<topic>.v<N>`, while the old contract, Robot task, and topic stay
+served for diagrams on the kept version. See "Versioning a published task"
+in [reference/element-templates.md](reference/element-templates.md).
+
 ## Workflow: bootstrap a package
 
 1. Choose the environment (see above). With devenv, copy `devenv.nix.tmpl` to

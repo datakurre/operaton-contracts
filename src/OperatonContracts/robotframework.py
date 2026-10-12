@@ -251,18 +251,25 @@ class RobotSuites:
             for task in suite.task_outputs:
                 self.tasks.setdefault(task, []).append(suite)
 
-    def check(self, spec: TaskTemplate, task: str) -> list[str]:
-        """Return mismatches between the suite defining ``task`` and ``spec``."""
+    def check_task(self, topic: str, task: str) -> list[str]:
+        """Return an error unless exactly one suite defines ``task``."""
         matches = self.tasks.get(normalize(task), [])
         if not matches:
-            return [f"{spec.topic}: no Robot suite defines task {task!r}"]
+            return [f"{topic}: no Robot suite defines task {task!r}"]
         if len(matches) > 1:
             names = ", ".join(str(m.path.relative_to(self.root)) for m in matches)
             return [
-                f"{spec.topic}: task {task!r} is defined in several suites "
+                f"{topic}: task {task!r} is defined in several suites "
                 f"({names}); purjo would run all of them"
             ]
-        suite = matches[0]
+        return []
+
+    def check(self, spec: TaskTemplate, task: str) -> list[str]:
+        """Return mismatches between the suite defining ``task`` and ``spec``."""
+        missing = self.check_task(spec.topic, task)
+        if missing:
+            return missing
+        suite = self.tasks[normalize(task)][0]
         key = normalize(task)
         errors: list[str] = []
         for alias, schema, _required in contract_properties(spec.inputs):

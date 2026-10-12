@@ -379,5 +379,7 @@ modeler then writes literal text; give such fields `Field(strict=False)` so
 - [Robot tasks](robot.md): defaults, outputs, and testing tasks.
 - [Element templates](templates.md): groups, icons, versions, and element
   types.
+- [Versioning tasks](templates.md#versioning-tasks): change a published
+  task without breaking the diagrams that already use it.
 - [purjo documentation](https://datakurre.github.io/purjo/): secrets,
   files, and serving options.
