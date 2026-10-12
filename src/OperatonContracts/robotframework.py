@@ -20,6 +20,7 @@ from robot.api.parsing import ModelVisitor
 from robot.libraries.BuiltIn import BuiltIn
 from robot.libraries.BuiltIn import RobotNotRunningError
 
+from OperatonContracts.contracts import TEMPLATE_KEY
 from OperatonContracts.contracts import aliases
 from OperatonContracts.contracts import import_contracts
 from OperatonContracts.contracts import load_contract
@@ -285,7 +286,10 @@ class RobotSuites:
                     f"{'a list' if sigil == '@' else 'a dictionary'}, but input "
                     f"{alias!r} is {schema.get('type', 'not a JSON array or object')}"
                 )
-        for alias, _schema, _required in contract_properties(spec.outputs):
+        for alias, schema, _required in contract_properties(spec.outputs):
+            if "source" in schema.get(TEMPLATE_KEY, {}):
+                # Mapped from another expression or a script, not ${alias}.
+                continue
             if normalize(alias) not in suite.task_outputs[key]:
                 errors.append(
                     f"{suite.path.name}: task {task!r} must set output "

@@ -14,7 +14,25 @@ from pydantic import ConfigDict
 from pydantic import JsonValue
 
 TEMPLATE_KEY = "x-element-template"
-HINT_KEYS = frozenset({"entries", "group", "type", "value"})
+HINT_KEYS = frozenset(
+    {
+        "additional_entries",
+        "choices",
+        "condition",
+        "constraints",
+        "display",
+        "editable",
+        "entries",
+        "group",
+        "item_type",
+        "optional",
+        "placeholder",
+        "script_format",
+        "source",
+        "type",
+        "value",
+    }
+)
 
 
 class TaskContract(BaseModel):
@@ -43,8 +61,23 @@ def template_hints(**hints: JsonValue) -> dict[str, JsonValue]:
     keys of a ``Map`` property as element-template entry objects (``key``
     plus optional ``label``, ``type``, ``value``, …). Required strings and
     non-empty strings or lists get ``notEmpty``; a Map's constraints come from
-    its value schema. Outputs accept only ``value`` (the target variable;
-    ``""`` writes no mapping unless a modeler user names one) and ``group``.
+    its value schema.
+
+    Further input hints: ``value=None`` pre-fills nothing; ``placeholder``
+    shows example text; ``optional`` leaves an empty input out of the XML;
+    ``editable=False`` makes it read-only; ``constraints`` adds or overrides
+    modeler validation (``notEmpty``, ``minLength``, ``maxLength``,
+    ``pattern``, ``minItems``, ``maxItems``, ``keyPattern``); ``choices``
+    labels Dropdown or List choices; ``display`` shows List choices as a
+    ``checklist`` or ``taglist``; ``item_type`` makes List items ``Date``;
+    ``condition`` shows the input only while another one has a given value;
+    ``script_format`` makes the value a script; ``additional_entries`` lets
+    modeler users add keys to a Map with fixed entries.
+
+    Outputs accept ``value`` (the target variable; ``""`` writes no mapping
+    unless a modeler user names one), ``group``, ``optional``, ``source`` (the
+    expression or script to map from instead of ``${alias}``),
+    ``script_format``, ``condition``, and ``editable``.
     """
     unknown = sorted(set(hints) - HINT_KEYS)
     if unknown:

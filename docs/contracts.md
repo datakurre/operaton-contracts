@@ -86,9 +86,20 @@ template-only information. Unknown keys raise `ValueError`.
 | `type` | Override the template property type: `String`, `Text`, `Hidden`, `Dropdown`, `Boolean`, `List`, or `Map` |
 | `group` | Show the property in another of the spec's `groups` instead of `input_group` |
 | `entries` | Fixed keys of a `Map` (`dict[str, str]`) input as element-template entries, e.g. `[{"key": "fi", "label": "Suomeksi", "type": "Text"}]` |
+| `additional_entries` | `True` lets modeler users add keys to a `Map` that also has fixed `entries` |
+| `placeholder` | Example text shown in an empty `String` or `Text` input |
+| `optional` | `True` leaves the input out of the XML while it is empty; the field needs a contract default |
+| `editable` | `False` shows the input read-only |
+| `constraints` | Modeler validation that adds to or overrides what the contract implies; see [Constraints](templates.md#constraints) |
+| `choices` | Labels for `Literal` choices, e.g. `[{"name": "E-mail", "value": "email"}]`, or the choices of a `Dropdown` or `List` on a plain `str` or `list[str]` |
+| `display` | How a `List` with choices is shown: `"taglist"` (default), `"checklist"`, or `None` for the modeler's default |
+| `item_type` | `"Date"` makes every item of a `List` a date picker |
+| `condition` | Show the input only while another one has a given value; see [Conditions](templates.md#conditions) |
+| `script_format` | Treat `value` as a script in this language, e.g. `"groovy"` |
 
 Without a `value` hint the template uses the schema `default`, then `[]` for
-lists, then `"${alias}"`. Note that `default_factory` does not appear in the
+lists, then `"${alias}"`. `value=None` pre-fills nothing, and so does an
+`optional` input without a hinted or non-empty default. Note that `default_factory` does not appear in the
 JSON Schema, so lists with `default_factory=list` need a `value` hint to
 pre-fill anything.
 
@@ -98,9 +109,11 @@ entries; any other string map lets modeler users add their own keys
 (`additionalEntries`). A Map takes no value: use `default_factory=dict` or
 `= {}`. See [Map inputs](templates.md#map-inputs) for constraints.
 
-Output fields accept only the `value` and `group` hints: `value` names the
-default target process variable, and `value=""` maps nothing unless a
-modeler user names one. Two outputs may not map to the same variable.
+Output fields accept the `value`, `group`, `optional`, `source`,
+`script_format`, `condition`, and `editable` hints: `value` names the default
+target process variable, and `value=""` maps nothing unless a modeler user
+names one. See [Outputs](templates.md#outputs). Two outputs may not map to
+the same variable.
 
 ## Values from Operaton
 

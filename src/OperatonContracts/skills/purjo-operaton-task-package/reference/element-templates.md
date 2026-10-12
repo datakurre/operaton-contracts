@@ -91,7 +91,8 @@ Properties start with Hidden `camunda:type = external` and
   → `"${alias}"`. The value must fit the type (`str` for String, Text,
   Hidden, Dropdown; `bool` for Boolean; `list` for List) or rendering fails.
 - `type` hints must be one of String, Text, Hidden, Dropdown, Boolean, List,
-  Map; a Dropdown needs `Literal` choices and a Map a `dict[str, str]` field.
+  Map; a Dropdown needs `Literal` choices or a `choices` hint, and a Map a
+  `dict[str, str]` field.
 - A Map takes no `value` (use `default_factory=dict` or `= {}`);
   `entries=[{"key": ..., "label": ..., "type": "Text", "value": ...}]` fixes
   its keys, labels, and defaults. Hinted keys must fit `Literal`/`Enum` keys
@@ -107,22 +108,62 @@ Properties start with Hidden `camunda:type = external` and
 - `constraints.notEmpty` (non-Map): `minLength ≥ 1`, `minItems ≥ 1`, or a
   required `String` property.
 - `binding`: `{"type": "camunda:inputParameter", "name": alias}`.
+- Presentation hints: `value=None` (pre-fill nothing), `placeholder`
+  (String/Text), `editable=False`, `choices=[{"name": ..., "value": ...}]`
+  (labels for `Literal` values, or the choices of a `type="Dropdown"` `str`
+  or a `list[str]`), `display="checklist"|"taglist"|None` (List with
+  choices), `item_type="Date"` (List without choices), and
+  `additional_entries=True` (user keys next to fixed Map `entries`).
+- `optional=True` leaves an empty input out of the XML: String, Text, or
+  Dropdown only, the field needs a contract default, and it cannot be
+  `notEmpty`.
+- `constraints={...}` is merged over the derived ones: `notEmpty`,
+  `minLength`, `maxLength`, `pattern` (a string or `{"value", "message"}`),
+  `minItems`/`maxItems` (List), `keyPattern` (Map). Contract patterns are not
+  copied to scalar and list inputs, because the modeler value may be an
+  expression such as `${id}`; write a modeler pattern that also accepts
+  `\$\{.+\}`.
+- `condition={"property": "<alias>", "equals": ...}` (or `oneOf`, `isActive`)
+  shows the input only then; the referenced input gets `id: <alias>`. Hidden
+  inputs are not written, so the field needs a default.
+- `script_format="groovy"` with the script as `value` binds a script input.
+- `TaskTemplate(additional_inputs=AdditionalInputs(label, description, group,
+  mirror_outputs, constraints))` adds a Map bound to
+  `camunda:additionalInputParameters` for inputs modeler users name
+  themselves. The contract and `Validate Task Input` do not cover them; the
+  task reads them as plain variables. `mirror_outputs=True` maps each back
+  as `<name> = ${<name>}`.
+- `TaskTemplate(groups=())` renders the properties ungrouped.
+- `TaskTemplate(settings=(TaskSetting("asyncBefore", value=True), ...))`
+  exposes engine settings as properties bound to `camunda:<name>`:
+  `asyncBefore`, `asyncAfter`, `exclusive` (Boolean) and `jobPriority`,
+  `taskPriority` (String, with optional `placeholder` and `constraints`).
+  `hidden=True` fixes the `value`; `label`, `description`, and `group` are
+  optional.
+- `TaskTemplate(errors=(ErrorDefinition(id, expression, code, name,
+  message=None), ...))` renders a `camunda:errorEventDefinition` property
+  and a `bpmn:Error` scope. The engine evaluates `expression` on the
+  worker's result (it can read the returned variables) and throws the BPMN
+  error `code` instead of completing the task, so a successful Robot task
+  can still raise a business error that a boundary event catches.
 
 ## Output mapping
 
 `String` property with `value: alias` and
 `binding: {"type": "camunda:outputParameter", "source": "${alias}"}`; the
 modeler user may rename the target process variable. Outputs accept only
-`template_hints(value=..., group=...)`: `value="name"` changes the default
-target, and `value=""` adds `optional: true` so no mapping is written unless
-the modeler user names a variable. Hinted names may not contain whitespace,
-`$`, `{`, or `}`, and no two outputs may map to the same variable.
+`template_hints(value=..., group=..., optional=..., source=...,
+script_format=..., condition=..., editable=...)`: `value="name"` changes the
+default target, and `value=""` adds `optional: true` so no mapping is written
+unless the modeler user names a variable. `optional=True` allows clearing a
+pre-filled target, `source` maps from another expression than `${alias}`,
+and `script_format` makes that source a script. Hinted names may not contain
+whitespace, `$`, `{`, or `}`, and no two outputs may map to the same variable.
 
 ## Hints
 
-`template_hints(value=..., type=..., group=..., entries=...)` only; unknown
-keys raise. Everything
-else is derived, so prefer adjusting the model over adding hints.
+Only the hints named above; unknown keys raise. Types, choices, defaults,
+and `notEmpty` are derived, so prefer adjusting the model over adding hints.
 
 ## `check` enforces
 

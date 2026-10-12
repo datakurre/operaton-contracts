@@ -791,7 +791,11 @@ class ElementTemplateRenderTests(unittest.TestCase):
             )
 
         for model, message in (
-            (output(type="Text"), "may only set group, value, not type"),
+            (
+                output(type="Text"),
+                "may only set condition, editable, group, optional, script_format, "
+                "source, value, not type",
+            ),
             (output(value=["x"]), "must be a process variable name"),
             (output(value="${expr}"), "'\\$\\{expr\\}' must be a process variable"),
             (output(value="has space"), "'has space' must be a process variable"),
@@ -1035,6 +1039,23 @@ class PackageCheckTests(unittest.TestCase):
                     "Validate Task Input    DemoInput"
                 ],
             )
+
+    def test_check_skips_outputs_mapped_from_another_source(self) -> None:
+        class SourcedOutput(TaskContract):
+            greeting: str = Field(alias="greeting", title="Greeting")
+            result: str = Field(
+                alias="result",
+                title="Result",
+                json_schema_extra=template_hints(source="${ greeting }"),
+            )
+
+        suite = DEMO_SUITE.replace(
+            "    VAR    ${result}=    ${{{}}}    scope=${BPMN:TASK}\n", ""
+        )
+        spec = TaskTemplate(**{**DEMO.__dict__, "outputs": SourcedOutput})
+        with DemoPackage(suite=suite) as package:
+            # The mapping reads ${ greeting }, so the task need not set result.
+            self.assertEqual(check_package(package.root, [spec]), [])
 
     def test_check_requires_typed_defaults_for_non_string_inputs(self) -> None:
         suite = DEMO_SUITE.replace("${count: int}    0", "${count}    0").replace(

@@ -155,10 +155,98 @@ and the icon. Properties start with Hidden `camunda:type = external` and
 | anything else | error, unless a `type` hint is given |
 
 - `value`: the `value` hint, the schema `default`, `[]` for `List`, or
-  `"${alias}"`. The value must fit the property type.
+  `"${alias}"`. The value must fit the property type. `value=None` leaves the
+  value out, so the modeler pre-fills nothing.
 - `constraints.notEmpty`: `minLength ≥ 1`, `minItems ≥ 1`, or a required
   `String`.
-- `group`: the spec's `input_group`, or the `group` hint.
+- `group`: the spec's `input_group`, or the `group` hint. A spec with
+  `groups=()` renders no groups, and its properties are listed ungrouped.
+- `choices`: the `Literal` values, each named by its value. A `choices` hint
+  names them (`[{"name": "E-mail", "value": "email"}]`), may leave some out,
+  and may give a choice its own `condition`. A pre-filled value must be one
+  of the hinted choices, or an expression. On a plain `str` (with
+  `type="Dropdown"`) or `list[str]` the hint alone defines the choices.
+- `display`: `"taglist"` for a `List` with choices; set the hint to
+  `"checklist"`, or to `None` for the modeler's default.
+- `itemType`: `"String"` for a `List` without choices; `item_type="Date"`
+  makes each item a date.
+- `placeholder`, `editable`: from the hints of the same name. A placeholder
+  needs a `String` or `Text` property.
+- `optional`: with `optional=True` the modeler does not write the input
+  parameter while it is empty. Only `String`, `Text`, and `Dropdown` inputs
+  can be optional, the contract field needs a default (the task sees it when
+  the input is left out), and the input cannot also be `notEmpty`. An
+  optional input is not pre-filled unless it has a `value` hint or a
+  non-empty default.
+- `binding.scriptFormat`: `script_format="groovy"` with the script as the
+  `value` hint, on a `String`, `Text`, or `Hidden` property. The engine
+  evaluates the script and passes its result, so the contract type is the
+  result's type; add a `type` hint (`"Text"` suits scripts) when the field
+  is not a string.
+
+### Constraints
+
+The `constraints` hint is merged over the derived `notEmpty`; its keys
+override it, and `"notEmpty": False` removes it.
+
+| Constraint | Applies to | Value |
+|---|---|---|
+| `notEmpty` | any input | boolean |
+| `minLength`, `maxLength` | text, each `List` item, each `Map` value | integer |
+| `pattern` | text, each `List` item, each `Map` value | a regular expression, or `{"value": "…", "message": "…"}` |
+| `minItems`, `maxItems` | `List` | integer |
+| `keyPattern` | `Map` keys that modeler users add | like `pattern` |
+
+Contract constraints such as `Field(pattern=…)` are **not** copied to scalar
+and list inputs, because modeler users often enter an expression like
+`${guestId}`, which the contract checks only after the engine has resolved
+it. Write the modeler-side rule as a hint, and let it accept expressions:
+
+```python
+guest_id: str = Field(
+    alias="id",
+    title="Guest ID",
+    pattern=r"^guest-[0-9a-f-]{36}$",                 # checked at runtime
+    json_schema_extra=template_hints(
+        value="${guestId}",
+        constraints={
+            "pattern": {
+                "value": r"^(guest-[0-9a-f-]{36}|\$\{.+\})$",   # checked in the modeler
+                "message": "Use guest-<uuid> or an expression.",
+            }
+        },
+    ),
+)
+```
+
+### Conditions
+
+A `condition` hint shows a property, and writes its value, only while
+another property has a given value:
+
+```python
+channel: Literal["email", "sms"] = Field(alias="channel", title="Channel", default="email")
+phone_number: str = Field(
+    alias="phoneNumber",
+    title="Phone number",
+    default="",
+    json_schema_extra=template_hints(
+        condition={"property": "channel", "equals": "sms"}
+    ),
+)
+```
+
+- `property` is the alias of another input; that property gets an `id` equal
+  to its alias. It may also be the `id` of a `Map` entry.
+- Give exactly one of `equals` (a value), `oneOf` (a list of values), or
+  `isActive` (whether the other property is itself shown).
+- A `List` or `Map` input cannot be compared with `equals` or `oneOf`;
+  `isActive` may refer to one. Conditions also work on outputs, `Map`
+  entries, and single `choices`, and are checked the same way.
+- A hidden input is not written to the XML, so a contract field with a
+  condition needs a default.
+- An entry `id` may not equal the alias of an input that a condition
+  refers to, and entry ids are unique in the template.
 
 ### Map inputs
 
@@ -182,6 +270,12 @@ A `dict[str, str]` input renders as a `Map`, bound as a
 - Keys must be strings: integer `Enum` keys are rejected.
 - A Map takes no value: use `default_factory=dict` or `= {}`, and pre-fill
   entries with `value` in the `entries` hint.
+- `additional_entries=True` adds `additionalEntries` to a Map with fixed
+  `entries`, so modeler users can add keys next to them. The contract keys
+  and values must then be free (`dict[str, str]` or a key pattern, not
+  `Literal` keys or values).
+- The `constraints` hint is merged over the derived Map constraints; see
+  [Constraints](#constraints).
 - Entries are checked against the element-template schema's entry rules:
   non-empty unique keys, string values (boolean for `Boolean`), `choices`
   only and always on `Dropdown`, `placeholder` only on `String`/`Text`, and
@@ -189,18 +283,145 @@ A `dict[str, str]` input renders as a `Map`, bound as a
   `optional` with `notEmpty`.
 - `binding`: `camunda:inputParameter` named by the alias.
 
+### User-added inputs
+
+`TaskTemplate(additional_inputs=AdditionalInputs(...))` adds one more `Map`,
+bound to `camunda:additionalInputParameters`: every key a modeler user adds
+becomes an input parameter of that name.
+
+```python
+from OperatonContracts.templates import AdditionalInputs, TaskTemplate
+
+TaskTemplate(
+    ...,
+    additional_inputs=AdditionalInputs(
+        label="Fields to load",
+        description="Each row names a variable and the field to load into it.",
+        group="fields",                 # default: input_group
+        mirror_outputs=True,
+        constraints={"notEmpty": True, "keyPattern": "^[a-z_][a-z0-9_]*$"},
+    ),
+)
+```
+
+- The property follows the contract inputs. Its `constraints` take
+  `notEmpty`, `minLength`, `maxLength`, and `pattern` for the values and
+  `keyPattern` for the names.
+- `mirror_outputs=True` keeps an output mapping `<name> = ${<name>}` for
+  every user-added input, so a result the task sets under the same name
+  reaches the process. A message end event cannot map outputs.
+- The contract does not describe these inputs, and `Validate Task Input`
+  does not return them. The task reads them as ordinary variables, and
+  `check` does not ask for suite defaults or outputs for them.
+
 ### Outputs
+
+Outputs accept the `value`, `group`, `optional`, `source`, `script_format`,
+`condition`, and `editable` hints.
 
 Each output is a `String` property bound as a `camunda:outputParameter`
 with `source = "${alias}"`. Its value, the target process variable, is the
-alias; modeler users may rename it.
-
-Outputs accept only the `value` and `group` hints. `value="other"` changes
+alias; modeler users may rename it. `value="other"` changes
 the default target variable. `value=""` leaves the target empty and adds
 `"optional": true`, so the output mapping is not written unless a modeler
 user names a variable; the worker's value is then not mapped to any process
 variable. A hinted name may not contain whitespace, `$`, `{`, or `}`, and
 two outputs may not map to the same variable.
+
+- `optional=True` keeps the pre-filled target variable but lets a modeler
+  user clear it; the mapping is then not written.
+- `source="${ result.id }"` maps from another expression than `${alias}`.
+  With `script_format="groovy"` the source is a script. `check` then does
+  not ask the task to set `${alias}`; the task must set whatever the source
+  reads.
+- `condition` and `editable` work as on inputs.
+
+### Task settings
+
+`TaskTemplate(settings=...)` lets modeler users adjust engine settings of the
+task. Each `TaskSetting` is a property bound to `camunda:<name>`, listed
+after the topic and before the inputs:
+
+```python
+from OperatonContracts.templates import DEFAULT_GROUPS, TaskSetting
+from OperatonContracts.templates import TaskTemplate, TemplateGroup
+
+TaskTemplate(
+    ...,
+    groups=(*DEFAULT_GROUPS, TemplateGroup("jobs", "Job execution")),
+    settings=(
+        TaskSetting("asyncBefore", value=True, group="jobs"),
+        TaskSetting("asyncAfter", value=False, group="jobs"),
+        TaskSetting("exclusive", value=True, hidden=True),
+        TaskSetting("jobPriority", placeholder="e.g. 10", group="jobs"),
+        TaskSetting(
+            "taskPriority",
+            placeholder="e.g. 50 or ${priority}",
+            constraints={
+                "pattern": {
+                    "value": r"^(\d+|\$\{.+\})?$",
+                    "message": "Must be a number or an expression.",
+                }
+            },
+        ),
+    ),
+)
+```
+
+| `name` | Property | Value |
+|---|---|---|
+| `asyncBefore`, `asyncAfter`, `exclusive` | `Boolean` | `True` or `False` |
+| `jobPriority`, `taskPriority` | `String` | text: a number or an expression |
+
+- `value` pre-fills the setting; `hidden=True` fixes that value without
+  showing it, and needs one.
+- `label` defaults to the setting's usual name, e.g. "Asynchronous before".
+  `description` and `group` are optional; without a `group` the setting is
+  listed outside the groups.
+- `placeholder` and `constraints` apply to the two text settings.
+- Each setting may be given once. On message events the modeler decides
+  which element the property is written to; check the result in your
+  modeler before publishing such a template.
+
+### Errors
+
+`TaskTemplate(errors=...)` defines BPMN errors that the engine throws from
+the worker's result. Each `ErrorDefinition` renders a property bound to
+`camunda:errorEventDefinition`, listed after the outputs, and a `bpmn:Error`
+scope with the error's code, message, and name:
+
+```python
+from OperatonContracts.templates import ErrorDefinition, TaskTemplate
+
+TaskTemplate(
+    ...,
+    errors=(
+        ErrorDefinition(
+            id="payment-failed",                       # unique in the template
+            expression='${ status == "DECLINED" }',
+            code="PAYMENT_DECLINED",                   # what boundary events catch
+            name="Payment failed",
+            message="Payment was declined",            # optional
+            description="Evaluated on the worker's result.",
+        ),
+    ),
+)
+```
+
+- The engine evaluates `expression` when the worker completes the task. It
+  can read the variables the task returned, such as the contract outputs.
+  When it holds, the engine throws the error instead of completing the
+  task, so an error boundary event with the same code catches it. (Operaton
+  also evaluates it when a worker reports a failure, with `externalTask`
+  available to the expression.)
+- This works for a task that **succeeds**: the Robot task sets its outputs
+  as usual, the topic keeps `on-fail = "FAIL"`, and the template decides
+  which results are business errors. Output mappings are evaluated first,
+  as for any BPMN error; see [Outputs](robot.md#outputs).
+- Modeler users may edit the expression, code, and message. `hidden=True`
+  fixes all three. The error name is always fixed.
+- `label` (default "Throw error when"), `description`, and `group` describe
+  the expression field.
 
 ## What `check` verifies
 
@@ -217,7 +438,8 @@ two outputs may not map to the same variable.
   accepted.
 - That suite declares a default for every input, typed for non-string inputs;
   the task calls `Validate Task Input    <InputContract>`; and it sets every
-  output with `VAR … scope=${BPMN:TASK}`.
+  output with `VAR … scope=${BPMN:TASK}`, except outputs with a `source`
+  hint.
 
 ## Schema
 

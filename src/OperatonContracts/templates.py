@@ -69,8 +69,21 @@ ENTRY_KEY_TYPES = {
 }
 ENTRY_TEXT_KEYS = ("id", "label", "description", "placeholder")
 CONSTRAINT_KEYS = frozenset({"notEmpty", "minLength", "maxLength", "pattern"})
-# Template hints that apply to output properties.
-OUTPUT_HINT_KEYS = frozenset({"group", "value"})
+# Constraints only some property types take, besides ``CONSTRAINT_KEYS``.
+TYPE_CONSTRAINT_KEYS = {
+    "List": frozenset({"minItems", "maxItems"}),
+    "Map": frozenset({"keyPattern"}),
+}
+# Property types that may be optional, per the element-template schema.
+OPTIONAL_TYPES = ("String", "Text", "Dropdown")
+LIST_DISPLAYS = ("checklist", "taglist")
+LIST_ITEM_TYPES = ("String", "Date")
+# Template hints that apply to output properties, and those that do not
+# apply to input properties.
+OUTPUT_HINT_KEYS = frozenset(
+    {"condition", "editable", "group", "optional", "script_format", "source", "value"}
+)
+OUTPUT_ONLY_HINT_KEYS = frozenset({"source"})
 # Target process variable names an output value hint may set.
 OUTPUT_NAME = re.compile(r"[^\s${}]+")
 
@@ -91,6 +104,81 @@ DEFAULT_GROUPS = (
     TemplateGroup("inputs", "Inputs"),
     TemplateGroup("outputs", "Results"),
 )
+
+
+@dataclass(frozen=True)
+class AdditionalInputs:
+    """A Map property for input parameters that modeler users add themselves.
+
+    It binds to ``camunda:additionalInputParameters``: every key a user adds
+    becomes an input parameter of that name, next to the contract's inputs.
+    The contract does not describe these inputs, so the task reads them as
+    plain variables. ``mirror_outputs`` also keeps an output mapping
+    ``<name> = ${<name>}`` for each of them. ``constraints`` apply to every
+    value (``notEmpty``, ``minLength``, ``maxLength``, ``pattern``) or to the
+    keys (``keyPattern``). ``group`` defaults to the spec's ``input_group``.
+    """
+
+    label: str
+    description: str | None = None
+    group: str | None = None
+    mirror_outputs: bool = False
+    constraints: Mapping[str, Any] | None = None
+
+
+# Settings of an external task element: the template label and whether the
+# value is a boolean (else text, e.g. a number or an expression).
+SETTINGS: dict[str, tuple[str, bool]] = {
+    "asyncBefore": ("Asynchronous before", True),
+    "asyncAfter": ("Asynchronous after", True),
+    "exclusive": ("Exclusive", True),
+    "jobPriority": ("Job priority", False),
+    "taskPriority": ("Task priority", False),
+}
+
+
+@dataclass(frozen=True)
+class TaskSetting:
+    """An engine setting of the task that modeler users may adjust.
+
+    ``name`` is one of ``asyncBefore``, ``asyncAfter``, ``exclusive``
+    (booleans), ``jobPriority``, or ``taskPriority`` (text: a number or an
+    expression). ``value`` pre-fills it; ``hidden`` fixes that value without
+    showing the setting. ``label`` defaults to the setting's name in the
+    modeler. ``placeholder`` and ``constraints`` apply to the text settings.
+    """
+
+    name: str
+    value: bool | str | None = None
+    label: str | None = None
+    description: str | None = None
+    group: str | None = None
+    hidden: bool = False
+    placeholder: str | None = None
+    constraints: Mapping[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ErrorDefinition:
+    """A BPMN error the engine throws when ``expression`` holds.
+
+    The expression is evaluated when the worker completes or fails the task,
+    and may refer to ``externalTask``. ``id`` names the error within the
+    template; ``code`` is the error code that boundary events catch, ``name``
+    the error's name, and ``message`` its optional message. Modeler users may
+    edit the expression, code, and message unless ``hidden`` fixes them.
+    ``label`` and ``description`` describe the expression field.
+    """
+
+    id: str
+    expression: str
+    code: str
+    name: str
+    message: str | None = None
+    label: str = "Throw error when"
+    description: str | None = None
+    group: str | None = None
+    hidden: bool = False
 
 
 class BpmnElement(NamedTuple):
@@ -138,6 +226,10 @@ class TaskTemplate:
     versions that ``generate`` copies unchanged from the existing template
     file, so the modeler can still resolve and upgrade diagrams using them.
     ``element_type`` is the BPMN element the template applies to.
+    ``additional_inputs`` adds a Map for inputs that modeler users name
+    themselves. Without ``groups`` the properties are not grouped.
+    ``settings`` exposes engine settings such as ``asyncBefore``, and
+    ``errors`` defines BPMN errors thrown from the worker's result.
     """
 
     topic: str
@@ -154,6 +246,9 @@ class TaskTemplate:
     icon: str | None = None
     keep_versions: tuple[int, ...] = ()
     element_type: ElementType = ElementType.SERVICE_TASK
+    additional_inputs: AdditionalInputs | None = None
+    settings: tuple[TaskSetting, ...] = ()
+    errors: tuple[ErrorDefinition, ...] = ()
 
 
 def contract_properties(
@@ -272,6 +367,8 @@ def _entry(alias: str, entry: Any) -> dict[str, Any]:
         raise TemplateError(
             f"{alias}: entry {key!r} cannot be both optional and notEmpty"
         )
+    if "condition" in entry:
+        _condition(f"{alias}: entry {key!r}", entry["condition"], entry.get("id"))
     return dict(entry)
 
 
@@ -374,7 +471,23 @@ def _map_property(
     if "pattern" in values:
         constraints["pattern"] = values["pattern"]
     prop: dict[str, Any] = {}
-    if entries:
+    additional = _flag(alias, hints, "additional_entries")
+    if entries and additional:
+        if allowed is not None:
+            raise TemplateError(
+                f"{alias}: additional_entries need free map keys, but the "
+                f"contract keys are {', '.join(map(str, allowed))}"
+            )
+        if value_choices:
+            raise TemplateError(
+                f"{alias}: additional_entries need free map values, but the "
+                f"contract values are {', '.join(map(str, value_choices))}"
+            )
+        prop["additionalEntries"] = True
+        if "pattern" in keys:
+            constraints["keyPattern"] = keys["pattern"]
+        prop["entries"] = entries
+    elif entries:
         prop["entries"] = entries
     else:
         if value_choices:
@@ -389,34 +502,164 @@ def _map_property(
     return prop
 
 
+def _pattern(alias: str, name: str, pattern: Any) -> None:
+    """Check a ``pattern`` or ``keyPattern``: a string or a value/message object."""
+    if isinstance(pattern, str):
+        return
+    if (
+        not isinstance(pattern, dict)
+        or not isinstance(pattern.get("value"), str)
+        or not isinstance(pattern.get("message", ""), str)
+        or set(pattern) - {"value", "message"}
+    ):
+        raise TemplateError(
+            f"{alias}: constraint {name} must be a string or an object with "
+            "a string value and an optional string message"
+        )
+
+
+def _constraints(
+    alias: str, property_type: str, derived: dict[str, Any], hint: Any
+) -> dict[str, Any]:
+    """Merge hinted constraints over the ones derived from the contract."""
+    if not isinstance(hint, Mapping):
+        raise TemplateError(f"{alias}: constraints must be an object")
+    allowed = CONSTRAINT_KEYS | TYPE_CONSTRAINT_KEYS.get(property_type, frozenset())
+    unknown = sorted(set(hint) - allowed)
+    if unknown:
+        raise TemplateError(
+            f"{alias}: a {property_type} cannot have constraint(s) "
+            f"{', '.join(unknown)}; allowed: {', '.join(sorted(allowed))}"
+        )
+    for name, value in hint.items():
+        if name in ("pattern", "keyPattern"):
+            _pattern(alias, name, value)
+        elif name == "notEmpty":
+            if not isinstance(value, bool):
+                raise TemplateError(f"{alias}: constraint notEmpty must be a boolean")
+        elif isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise TemplateError(
+                f"{alias}: constraint {name} must be a non-negative integer"
+            )
+    merged = {**derived, **hint}
+    if merged.get("notEmpty") is False:
+        del merged["notEmpty"]
+    return merged
+
+
+def _hinted_choices(
+    alias: str, choices: Any, values: Sequence[Any] | None
+) -> list[dict[str, Any]]:
+    """Check a ``choices`` hint: name/value objects within the contract values."""
+    if (
+        not isinstance(choices, list)
+        or not choices
+        or not all(
+            isinstance(choice, dict)
+            and set(choice) - {"condition"} == {"name", "value"}
+            and isinstance(choice["name"], str)
+            and isinstance(choice["value"], str)
+            for choice in choices
+        )
+    ):
+        raise TemplateError(
+            f"{alias}: choices must be a non-empty list of string name/value objects"
+        )
+    chosen = [choice["value"] for choice in choices]
+    if len(set(chosen)) != len(chosen):
+        raise TemplateError(f"{alias}: choice values must be unique")
+    outside = [value for value in chosen if values is not None and value not in values]
+    if outside:
+        raise TemplateError(
+            f"{alias}: choices {', '.join(map(repr, outside))} are not contract "
+            f"values {', '.join(map(str, values or ()))}"
+        )
+    for choice in choices:
+        if "condition" in choice:
+            _condition(alias, choice["condition"])
+    return [dict(choice) for choice in choices]
+
+
+def _condition(alias: str, condition: Any, own: str | None = None) -> dict[str, Any]:
+    """Check a ``condition``: a property id and one of equals, oneOf, isActive.
+
+    ``own`` is the id of the property the condition belongs to, if it has one.
+    """
+    checks = ("equals", "oneOf", "isActive")
+    if (
+        not isinstance(condition, dict)
+        or not isinstance(condition.get("property"), str)
+        or set(condition) - {"type", "property", *checks}
+        or sum(check in condition for check in checks) != 1
+        or condition.get("type", "simple") != "simple"
+    ):
+        raise TemplateError(
+            f"{alias}: a condition needs a property and exactly one of "
+            f"{', '.join(checks)}"
+        )
+    if "equals" in condition and not isinstance(condition["equals"], (str, int, float)):
+        raise TemplateError(
+            f"{alias}: condition equals must be a string, number, or boolean"
+        )
+    if "oneOf" in condition and not (
+        isinstance(condition["oneOf"], list)
+        and all(
+            isinstance(value, (str, int, float)) and not isinstance(value, bool)
+            for value in condition["oneOf"]
+        )
+    ):
+        raise TemplateError(
+            f"{alias}: condition oneOf must be a list of strings or numbers"
+        )
+    if "isActive" in condition and not isinstance(condition["isActive"], bool):
+        raise TemplateError(f"{alias}: condition isActive must be a boolean")
+    if condition["property"] == own:
+        raise TemplateError(f"{alias}: a condition cannot depend on its own property")
+    return dict(condition)
+
+
+def _flag(alias: str, hints: dict[str, Any], name: str) -> bool | None:
+    """Return a boolean hint, or None when it is not set."""
+    if name not in hints:
+        return None
+    if not isinstance(hints[name], bool):
+        raise TemplateError(f"{alias}: {name} must be a boolean")
+    return bool(hints[name])
+
+
+def _text(alias: str, hints: dict[str, Any], name: str) -> str | None:
+    """Return a non-empty string hint, or None when it is not set."""
+    if name not in hints:
+        return None
+    if not isinstance(hints[name], str) or not hints[name]:
+        raise TemplateError(f"{alias}: {name} must be a non-empty string")
+    return str(hints[name])
+
+
 def _input_property(
     alias: str,
     schema: dict[str, Any],
     required: bool,
-    group: str,
+    group: str | None,
     group_ids: Sequence[str],
 ) -> dict[str, Any]:
     hints: dict[str, Any] = schema.get(TEMPLATE_KEY, {})
+    unsupported = sorted(set(hints) & OUTPUT_ONLY_HINT_KEYS)
+    if unsupported:
+        raise TemplateError(f"{alias}: input hints cannot set {', '.join(unsupported)}")
     prop: dict[str, Any] = {"label": schema["title"]}
     if "description" in schema:
         prop["description"] = schema["description"]
 
     json_type = schema.get("type")
     items: dict[str, Any] = schema.get("items", {})
+    string_list = json_type == "array" and items.get("type") == "string"
     if json_type == "boolean":
         prop["type"] = "Boolean"
-    elif json_type == "string" and "enum" in schema:
-        prop["type"] = "Dropdown"
-        prop["choices"] = _choices(schema["enum"])
     elif json_type == "string":
-        prop["type"] = "String"
-    elif json_type == "array" and items.get("type") == "string":
+        prop["type"] = "Dropdown" if "enum" in schema else "String"
+    elif string_list:
         prop["type"] = "List"
-        if "enum" in items:
-            prop["display"] = "taglist"
-            prop["choices"] = _choices(items["enum"])
-        else:
-            prop["itemType"] = "String"
     elif _map_schemas(schema) is not None:
         prop["type"] = "Map"
     elif "type" not in hints:
@@ -427,47 +670,164 @@ def _input_property(
         )
     if "type" in hints:
         prop["type"] = hints["type"]
-    if prop["type"] not in PROPERTY_TYPES:
+    property_type = prop["type"]
+    if property_type not in PROPERTY_TYPES:
         raise TemplateError(
-            f"{alias}: template type {prop['type']!r} is not one of "
+            f"{alias}: template type {property_type!r} is not one of "
             f"{', '.join(PROPERTY_TYPES)}"
         )
-    if prop["type"] == "Dropdown" and "choices" not in prop:
-        raise TemplateError(f"{alias}: a Dropdown needs Literal choices")
-    if "entries" in hints and prop["type"] != "Map":
-        raise TemplateError(f"{alias}: entries need a Map property")
-    group = _group(alias, hints, group, group_ids)
 
-    if prop["type"] == "Map":
-        entries = _map_property(alias, schema, hints)
-        if "constraints" in entries:
-            prop["constraints"] = entries.pop("constraints")
-        prop["group"] = group
-        prop["binding"] = {"type": "camunda:inputParameter", "name": alias}
-        prop.update(entries)
-        return prop
-
-    if "value" in hints:
-        prop["value"] = hints["value"]
-    elif "default" in schema:
-        prop["value"] = schema["default"]
-    elif prop["type"] == "List":
-        prop["value"] = []
-    else:
-        prop["value"] = f"${{{alias}}}"
-    if not isinstance(prop["value"], VALUE_TYPES[prop["type"]]):
+    # Choices come from Literal values; a hint labels or narrows them.
+    values: list[Any] | None = None
+    if property_type in ("Dropdown", "List"):
+        values = schema.get("enum") if json_type == "string" else None
+        if string_list:
+            values = items.get("enum")
+    choices: list[dict[str, Any]] | None = None
+    if "choices" in hints:
+        if property_type not in ("Dropdown", "List"):
+            raise TemplateError(f"{alias}: choices need a Dropdown or List property")
+        choices = _hinted_choices(alias, hints["choices"], values)
+    elif values is not None:
+        choices = _choices(values)
+    if property_type == "Dropdown" and choices is None:
         raise TemplateError(
-            f"{alias}: value {prop['value']!r} does not fit template type "
-            f"{prop['type']}; add a value hint"
+            f"{alias}: a Dropdown needs Literal choices or a choices hint"
         )
-    if (
-        schema.get("minLength", 0) >= 1
-        or schema.get("minItems", 0) >= 1
-        or (required and prop["type"] == "String")
-    ):
-        prop["constraints"] = {"notEmpty": True}
-    prop["group"] = group
+    if choices is not None and property_type == "List":
+        display = hints.get("display", "taglist" if string_list else None)
+        if display is not None:
+            if display not in LIST_DISPLAYS:
+                raise TemplateError(
+                    f"{alias}: display must be one of {', '.join(LIST_DISPLAYS)}, "
+                    "or None for the modeler default"
+                )
+            prop["display"] = display
+        if "item_type" in hints:
+            raise TemplateError(f"{alias}: a List with choices takes no item_type")
+    else:
+        if "display" in hints:
+            raise TemplateError(f"{alias}: display needs a List with choices")
+        if "item_type" in hints and property_type != "List":
+            raise TemplateError(f"{alias}: item_type needs a List property")
+        item_type = hints.get("item_type", "String")
+        if item_type not in LIST_ITEM_TYPES:
+            raise TemplateError(
+                f"{alias}: item_type must be one of {', '.join(LIST_ITEM_TYPES)}"
+            )
+        if string_list and property_type == "List" or "item_type" in hints:
+            prop["itemType"] = item_type
+    if choices is not None:
+        prop["choices"] = choices
+    if "entries" in hints and property_type != "Map":
+        raise TemplateError(f"{alias}: entries need a Map property")
+    if "additional_entries" in hints and property_type != "Map":
+        raise TemplateError(f"{alias}: additional_entries need a Map property")
+
+    derived: dict[str, Any] = {}
+    extras: dict[str, Any] = {}
+    if property_type == "Map":
+        extras = _map_property(alias, schema, hints)
+        derived = extras.pop("constraints", {})
+        if "script_format" in hints:
+            raise TemplateError(f"{alias}: a Map cannot be a script")
+    else:
+        if "value" in hints:
+            value = hints["value"]
+        elif "default" in schema:
+            value = schema["default"]
+        elif property_type == "List":
+            value = []
+        elif hints.get("optional"):
+            value = None
+        else:
+            value = f"${{{alias}}}"
+        if hints.get("optional") and value == "":
+            # An optional input is left out when empty; pre-fill nothing.
+            value = None
+        if value is not None:
+            if not isinstance(value, VALUE_TYPES[property_type]) or (
+                isinstance(value, list)
+                and not all(isinstance(item, str) for item in value)
+            ):
+                raise TemplateError(
+                    f"{alias}: value {value!r} does not fit template type "
+                    f"{property_type}; add a value hint"
+                )
+            prop["value"] = value
+            chosen = [choice["value"] for choice in hints.get("choices", ())]
+            outside = [
+                item
+                for item in (value if isinstance(value, list) else [value])
+                if "choices" in hints
+                and isinstance(item, str)
+                and item not in chosen
+                and not item.startswith("${")
+            ]
+            if outside:
+                raise TemplateError(
+                    f"{alias}: value {', '.join(map(repr, outside))} is not one "
+                    "of the hinted choices"
+                )
+        if (
+            schema.get("minLength", 0) >= 1
+            or schema.get("minItems", 0) >= 1
+            or (required and property_type == "String")
+        ):
+            derived = {"notEmpty": True}
+
+    placeholder = _text(alias, hints, "placeholder")
+    if placeholder is not None:
+        if property_type not in ("String", "Text"):
+            raise TemplateError(f"{alias}: placeholder needs a String or Text property")
+        prop["placeholder"] = placeholder
+    constraints = (
+        _constraints(alias, property_type, derived, hints["constraints"])
+        if "constraints" in hints
+        else derived
+    )
+    optional = _flag(alias, hints, "optional")
+    if optional:
+        if property_type not in OPTIONAL_TYPES:
+            raise TemplateError(
+                f"{alias}: only {', '.join(OPTIONAL_TYPES)} inputs can be optional"
+            )
+        if required:
+            raise TemplateError(
+                f"{alias}: an optional input needs a contract default, because "
+                "the modeler leaves it out when it is empty"
+            )
+        if constraints.get("notEmpty"):
+            raise TemplateError(f"{alias}: an input cannot be optional and notEmpty")
+    if optional:
+        prop["optional"] = True
+    editable = _flag(alias, hints, "editable")
+    if editable is not None:
+        prop["editable"] = editable
+    if constraints:
+        prop["constraints"] = constraints
+    if "condition" in hints:
+        if required:
+            raise TemplateError(
+                f"{alias}: an input with a condition needs a contract default, "
+                "because the modeler leaves it out while it is hidden"
+            )
+        prop["condition"] = _condition(alias, hints["condition"], alias)
+    group = _group(alias, hints, group, group_ids)
+    if group is not None:
+        prop["group"] = group
     prop["binding"] = {"type": "camunda:inputParameter", "name": alias}
+    script_format = _text(alias, hints, "script_format")
+    if script_format is not None:
+        if property_type not in ("String", "Text", "Hidden") or not isinstance(
+            hints.get("value"), str
+        ):
+            raise TemplateError(
+                f"{alias}: script_format needs a String, Text, or Hidden "
+                "property with the script as its value hint"
+            )
+        prop["binding"]["scriptFormat"] = script_format
+    prop.update(extras)
     return prop
 
 
@@ -477,8 +837,8 @@ def _describe(schema: dict[str, Any]) -> str:
 
 
 def _group(
-    alias: str, hints: dict[str, Any], group: str, group_ids: Sequence[str]
-) -> str:
+    alias: str, hints: dict[str, Any], group: str | None, group_ids: Sequence[str]
+) -> str | None:
     """Return the ``group`` hint, checked against the spec's groups, or ``group``."""
     if "group" not in hints:
         return group
@@ -488,7 +848,7 @@ def _group(
 
 
 def _output_property(
-    alias: str, schema: dict[str, Any], group: str, group_ids: Sequence[str]
+    alias: str, schema: dict[str, Any], group: str | None, group_ids: Sequence[str]
 ) -> dict[str, Any]:
     hints: dict[str, Any] = schema.get(TEMPLATE_KEY, {})
     unsupported = sorted(set(hints) - OUTPUT_HINT_KEYS)
@@ -505,21 +865,255 @@ def _output_property(
             f"{alias}: output value {value!r} must be a process variable name "
             "(no spaces, $, {, or }) or empty"
         )
+    optional = _flag(alias, hints, "optional")
+    if optional is False and not value:
+        raise TemplateError(
+            f"{alias}: an output without a target variable is always optional"
+        )
     group = _group(alias, hints, group, group_ids)
     prop: dict[str, Any] = {"label": schema["title"]}
     if "description" in schema:
         prop["description"] = schema["description"]
     prop.update({"type": "String", "value": value})
-    if not value:
-        # Without a target variable name the output mapping is not written.
+    if not value or optional:
+        # An empty target variable name means the output mapping is not written.
         prop["optional"] = True
-    prop.update(
-        {
-            "group": group,
-            "binding": {"type": "camunda:outputParameter", "source": f"${{{alias}}}"},
-        }
-    )
+    editable = _flag(alias, hints, "editable")
+    if editable is not None:
+        prop["editable"] = editable
+    if "condition" in hints:
+        prop["condition"] = _condition(alias, hints["condition"])
+    if group is not None:
+        prop["group"] = group
+    source = _text(alias, hints, "source")
+    binding = {
+        "type": "camunda:outputParameter",
+        "source": f"${{{alias}}}" if source is None else source,
+    }
+    script_format = _text(alias, hints, "script_format")
+    if script_format is not None:
+        if source is None:
+            raise TemplateError(
+                f"{alias}: script_format needs the script as the source hint"
+            )
+        binding["scriptFormat"] = script_format
+    prop["binding"] = binding
     return prop
+
+
+def _optional_texts(where: str, /, **texts: object) -> None:
+    """Require every given spec value to be a string or None."""
+    for name, text in texts.items():
+        if text is not None and not isinstance(text, str):
+            raise TemplateError(f"{where}: {name} must be a string")
+
+
+def _additional_inputs(
+    spec: TaskTemplate, group: str | None, group_ids: Sequence[str]
+) -> dict[str, Any]:
+    """Render the Map of input parameters that modeler users add themselves."""
+    additional = spec.additional_inputs
+    label = f"{spec.topic}: additional_inputs"
+    if not isinstance(additional, AdditionalInputs):
+        raise TemplateError(f"{label} must be an AdditionalInputs")
+    if not isinstance(additional.label, str) or not additional.label:
+        raise TemplateError(f"{label} need a label")
+    _optional_texts(label, description=additional.description, group=additional.group)
+    if not isinstance(additional.mirror_outputs, bool):
+        raise TemplateError(f"{label}: mirror_outputs must be a boolean")
+    if additional.mirror_outputs and spec.element_type is ElementType.MESSAGE_END_EVENT:
+        raise TemplateError(
+            f"{label}: a message end event cannot map outputs; "
+            "leave mirror_outputs off"
+        )
+    prop: dict[str, Any] = {"label": additional.label}
+    if additional.description is not None:
+        prop["description"] = additional.description
+    prop["type"] = "Map"
+    if additional.mirror_outputs:
+        prop["mirrorOutputs"] = True
+    constraints = _constraints(
+        label,
+        "Map",
+        {},
+        {} if additional.constraints is None else additional.constraints,
+    )
+    if constraints:
+        prop["constraints"] = constraints
+    group = _group(
+        label, {"group": additional.group} if additional.group else {}, group, group_ids
+    )
+    if group is not None:
+        prop["group"] = group
+    prop["binding"] = {"type": "camunda:additionalInputParameters"}
+    return prop
+
+
+def _settings(spec: TaskTemplate, group_ids: Sequence[str]) -> list[dict[str, Any]]:
+    """Render the engine settings as properties bound to ``camunda:<name>``."""
+    properties: list[dict[str, Any]] = []
+    names: list[str] = []
+    for setting in spec.settings:
+        if not isinstance(setting, TaskSetting) or setting.name not in SETTINGS:
+            raise TemplateError(
+                f"{spec.topic}: settings must be TaskSetting objects named one "
+                f"of {', '.join(SETTINGS)}"
+            )
+        label = f"{spec.topic}: setting {setting.name}"
+        if setting.name in names:
+            raise TemplateError(f"{label} is given twice")
+        names.append(setting.name)
+        _optional_texts(
+            label,
+            label=setting.label,
+            description=setting.description,
+            group=setting.group,
+            placeholder=setting.placeholder,
+        )
+        default_label, boolean = SETTINGS[setting.name]
+        value_type = bool if boolean else str
+        if setting.value is not None and not isinstance(setting.value, value_type):
+            raise TemplateError(f"{label}: value must be a {value_type.__name__}")
+        if setting.hidden and setting.value is None:
+            raise TemplateError(f"{label}: a hidden setting needs a value")
+        if boolean and (setting.placeholder or setting.constraints):
+            raise TemplateError(
+                f"{label}: a boolean setting takes no placeholder or constraints"
+            )
+        prop: dict[str, Any] = {"label": setting.label or default_label}
+        if setting.description is not None:
+            prop["description"] = setting.description
+        prop["type"] = (
+            "Hidden" if setting.hidden else "Boolean" if boolean else "String"
+        )
+        if setting.value is not None:
+            prop["value"] = setting.value
+        if setting.placeholder is not None and not setting.hidden:
+            prop["placeholder"] = setting.placeholder
+        constraints = _constraints(
+            label,
+            "String",
+            {},
+            {} if setting.constraints is None else setting.constraints,
+        )
+        if constraints and not setting.hidden:
+            prop["constraints"] = constraints
+        group = _group(
+            label, {"group": setting.group} if setting.group else {}, None, group_ids
+        )
+        if group is not None:
+            prop["group"] = group
+        prop["binding"] = {"type": "property", "name": f"camunda:{setting.name}"}
+        properties.append(prop)
+    return properties
+
+
+def _errors(
+    spec: TaskTemplate, group_ids: Sequence[str]
+) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+    """Render error definitions as properties and their ``bpmn:Error`` scopes."""
+    properties: list[dict[str, Any]] = []
+    scopes: list[dict[str, Any]] = []
+    for error in spec.errors:
+        if not isinstance(error, ErrorDefinition):
+            raise TemplateError(f"{spec.topic}: errors must be ErrorDefinition objects")
+        label = f"{spec.topic}: error {error.id!r}"
+        texts = {
+            "id": error.id,
+            "expression": error.expression,
+            "code": error.code,
+            "name": error.name,
+            "label": error.label,
+        }
+        for name, text in texts.items():
+            if not isinstance(text, str) or not text:
+                raise TemplateError(f"{label}: {name} must be a non-empty string")
+        _optional_texts(
+            label,
+            message=error.message,
+            description=error.description,
+            group=error.group,
+        )
+        if error.id in [scope["id"] for scope in scopes]:
+            raise TemplateError(f"{label} is defined twice")
+        shown = "Hidden" if error.hidden else "String"
+        prop: dict[str, Any] = {"label": error.label}
+        if error.description is not None:
+            prop["description"] = error.description
+        prop.update({"type": shown, "value": error.expression})
+        group = _group(
+            label, {"group": error.group} if error.group else {}, None, group_ids
+        )
+        if group is not None:
+            prop["group"] = group
+        prop["binding"] = {"type": "camunda:errorEventDefinition", "errorRef": error.id}
+        properties.append(prop)
+        scoped = [("Error code", shown, error.code, "errorCode")]
+        if error.message is not None:
+            scoped.append(
+                ("Error message", shown, error.message, "camunda:errorMessage")
+            )
+        scoped.append(("Error name", "Hidden", error.name, "name"))
+        scopes.append(
+            {
+                "type": "bpmn:Error",
+                "id": error.id,
+                "properties": [
+                    {
+                        "label": scope_label,
+                        "type": scope_type,
+                        "value": value,
+                        "binding": {"type": "property", "name": name},
+                    }
+                    for scope_label, scope_type, value, name in scoped
+                ],
+            }
+        )
+    return properties, scopes
+
+
+def _link_conditions(topic: str, properties: Sequence[dict[str, Any]]) -> None:
+    """Give every property a condition refers to an ``id``, and check the rest."""
+    by_name = {
+        prop["binding"]["name"]: prop
+        for prop in properties
+        if prop["binding"]["type"] == "camunda:inputParameter"
+    }
+    entry_ids = [
+        entry["id"]
+        for prop in properties
+        for entry in prop.get("entries", ())
+        if "id" in entry
+    ]
+    ids = set(entry_ids)
+    if len(ids) != len(entry_ids):
+        raise TemplateError(f"{topic}: entry ids must be unique in the template")
+    conditions = [
+        item["condition"]
+        for prop in properties
+        for item in (prop, *prop.get("entries", ()), *prop.get("choices", ()))
+        if "condition" in item
+    ]
+    for condition in conditions:
+        name = condition["property"]
+        if name in by_name:
+            target = by_name[name]
+            if target["type"] in ("List", "Map") and "isActive" not in condition:
+                raise TemplateError(
+                    f"{topic}: a condition cannot compare the "
+                    f"{target['type']} input {name!r}"
+                )
+            if name in ids:
+                raise TemplateError(
+                    f"{topic}: condition property {name!r} is both an input "
+                    "alias and an entry id; rename the entry id"
+                )
+            target["id"] = name
+        elif name not in ids:
+            raise TemplateError(
+                f"{topic}: condition property {name!r} is not an input alias "
+                "or an entry id"
+            )
 
 
 def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str, Any]:
@@ -531,10 +1125,16 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
             f"{spec.topic}: element_type must be an ElementType, e.g. "
             "ElementType.MESSAGE_INTERMEDIATE_THROW_EVENT"
         )
+    for name in ("groups", "settings", "errors"):
+        if not isinstance(getattr(spec, name), (tuple, list)):
+            raise TemplateError(f"{spec.topic}: {name} must be a tuple")
     group_ids = [group.id for group in spec.groups]
-    for group_id in (spec.input_group, spec.output_group):
+    for group_id in (spec.input_group, spec.output_group) if spec.groups else ():
         if group_id not in group_ids:
             raise TemplateError(f"{spec.topic}: unknown group id {group_id!r}")
+    # Without groups the properties are listed ungrouped.
+    input_group = spec.input_group if spec.groups else None
+    output_group = spec.output_group if spec.groups else None
     properties: list[dict[str, Any]] = [
         {
             "label": "Implementation",
@@ -549,12 +1149,16 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
             "binding": {"type": "property", "name": "camunda:topic"},
         },
     ]
+    fixed = len(properties)
+    properties.extend(_settings(spec, group_ids))
     properties.extend(
-        _input_property(alias, schema, required, spec.input_group, group_ids)
+        _input_property(alias, schema, required, input_group, group_ids)
         for alias, schema, required in contract_properties(spec.inputs)
     )
+    if spec.additional_inputs is not None:
+        properties.append(_additional_inputs(spec, input_group, group_ids))
     outputs = [
-        _output_property(alias, schema, spec.output_group, group_ids)
+        _output_property(alias, schema, output_group, group_ids)
         for alias, schema, _required in contract_properties(spec.outputs)
     ]
     if outputs and spec.element_type is ElementType.MESSAGE_END_EVENT:
@@ -571,6 +1175,9 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
             f"{', '.join(map(repr, repeated))}; give each a distinct value hint"
         )
     properties.extend(outputs)
+    error_properties, scopes = _errors(spec, group_ids)
+    properties.extend(error_properties)
+    _link_conditions(spec.topic, properties[fixed:])
     icon = base64.b64encode(icon_svg).decode("ascii")
     return {
         "$schema": schema_url,
@@ -579,8 +1186,17 @@ def render(spec: TaskTemplate, *, icon_svg: bytes, schema_url: str) -> dict[str,
         "description": spec.description,
         "version": spec.version,
         **spec.element_type.template_fields(),
-        "groups": [{"id": group.id, "label": group.label} for group in spec.groups],
+        **(
+            {
+                "groups": [
+                    {"id": group.id, "label": group.label} for group in spec.groups
+                ]
+            }
+            if spec.groups
+            else {}
+        ),
         "properties": properties,
+        **({"scopes": scopes} if scopes else {}),
         "icon": {"contents": f"data:image/svg+xml;base64,{icon}"},
     }
 

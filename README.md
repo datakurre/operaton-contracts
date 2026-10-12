@@ -57,9 +57,14 @@ field needs an `alias` (the process variable name) and a `title` (the
 template label). Use `Literal[...]` for choices; `Enum`, `Optional`, and nested
 models are not supported in template inputs; `dict[str, str]` renders as a
 `Map`. `template_hints(value=..., type=..., group=..., entries=...)` sets
-template-only defaults, property types, groups, and `Map` entries. On
-outputs, only `value` (the target process variable, or `""` for none) and
-`group` apply.
+template-only defaults, property types, groups, and `Map` entries; further
+hints add placeholders, optional inputs, modeler constraints, choice labels,
+conditions, and script values. On outputs, `value` (the target process
+variable, or `""` for none), `group`, `optional`, `source`, `script_format`,
+`condition`, and `editable` apply. `TaskTemplate(additional_inputs=...)`
+adds a `Map` for inputs that modeler users name themselves, `settings=...`
+exposes engine settings such as `asyncBefore`, and `errors=...` defines BPMN
+errors thrown from the worker's result.
 
 ## Robot tasks
 
