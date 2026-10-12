@@ -1,21 +1,30 @@
 # Changelog
 
-## Unreleased
+## 0.5.0
+
+Breaking: existing projects may need changes before `check` passes again or
+error handling keeps working.
 
 - `Validate Task Input` fails with `InvalidTaskInput` instead of a pydantic
   `ValidationError`. The message starts with the line `InvalidTaskInput`,
   which purjo uses as the BPMN `errorCode`, followed by the contract name and
-  one `alias: problem (got value)` line per invalid variable.
-- `check` messages for a topic without a template spec, or a spec without a
-  topic, say how to fix them.
+  one `alias: problem (got value)` line per invalid variable. Error boundary
+  events that matched the old `ValidationError: …` code need the new one.
 - `check` no longer counts a `VAR ${x}=    ${None}    scope=${BPMN:TASK}`
   placeholder as setting output `x`: a task must also set its real value.
+
+Changes:
+
 - The agent skill and docs set every output to `${None}` with task scope
   before `Validate Task Input`: Operaton evaluates output mappings before a
   BPMN error reaches its boundary event, so outputs must exist even when the
-  task fails (needs purjo 1.0rc2 or newer to store them for failed tasks).
+  task fails. This needs purjo 1.0rc2 or newer, which stores them for tasks
+  that end with a BPMN error.
+- `check` messages for a topic without a template spec, or a spec without a
+  topic, say how to fix them.
 - New tutorial page: a Greet task from `pur init` to a running Operaton
-  process, with the values the engine sends and how invalid input surfaces.
+  process, with the values the engine sends and how invalid input surfaces,
+  verified against Operaton 2.1.5 and purjo 1.0rc2.
 
 ## 0.4.0
 

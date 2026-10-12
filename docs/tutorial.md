@@ -16,9 +16,10 @@ OperatonTasks.py ──generate──▶ .operaton/element-templates/greet.json 
        └──Validate Task Input──▶ greet.robot ◀──pur serve── Operaton ◀──pur run──────────┘
 ```
 
-Every command below was run against Operaton 2.1.5, purjo 1.0rc1, and
-Robot Framework 7.5. Catching invalid input with an error boundary event
-([When input is invalid](#when-input-is-invalid)) needs purjo 1.0rc2.
+Every command below was run against Operaton 2.1.5, purjo 1.0rc2, and
+Robot Framework 7.5. Use purjo 1.0rc2 or newer: older versions cannot catch
+invalid input with an error boundary event
+([When input is invalid](#when-input-is-invalid)).
 
 ## 1. Start Operaton
 
@@ -66,7 +67,7 @@ Then add the dependencies:
 
 ```console
 uv add "operaton-contracts[robot]"
-uv add --group dev purjo "operaton-contracts[templates]"
+uv add --group dev "purjo>=1.0rc2" "operaton-contracts[templates]"
 ```
 
 `operaton-contracts[robot]` is a runtime dependency: the deployed suites
@@ -319,12 +320,36 @@ Greet
     …
 ```
 
-purjo 1.0rc2 stores the task-scope variables a failed task has set as local
-variables of the task execution, so the mapping resolves and the process
-continues from the boundary event with `greeting` set to `null` (or to
-whatever value the task set before a later step failed). purjo
-1.0rc1 sends only process-scope variables with a BPMN error; with it, use
-`on-fail = "FAIL"` and handle invalid input as incidents.
+On a BPMN error, purjo stores the task-scope variables the failed task has
+set as local variables of the task execution, so the mapping resolves. To
+catch invalid input, set the topic's `on-fail = "ERROR"` and attach an error
+boundary event with the error code `InvalidTaskInput` to the service task:
+
+```xml title="examples/greet.bpmn (error boundary event)"
+<bpmn:boundaryEvent id="InvalidInput" name="Invalid input" attachedToRef="Greet">
+  <bpmn:outgoing>Flow_Invalid</bpmn:outgoing>
+  <bpmn:errorEventDefinition errorRef="Error_InvalidTaskInput"
+      camunda:errorCodeVariable="errorCode"
+      camunda:errorMessageVariable="errorMessage" />
+</bpmn:boundaryEvent>
+…
+<bpmn:error id="Error_InvalidTaskInput" name="Invalid task input"
+    errorCode="InvalidTaskInput" />
+```
+
+Started with a blank name, the process continues from the boundary event
+with these variables:
+
+```text
+errorCode    = InvalidTaskInput
+errorMessage = GreetInput:
+               name: String should have at least 1 character (got '   ')
+greeting     = null
+```
+
+An output keeps the value the task gave it before a later step failed, and
+is `null` otherwise. purjo versions before 1.0rc2 send only process-scope
+variables with a BPMN error, so the mapping fails as described above.
 
 Outputs with `template_hints(value="")` have no mapping unless a modeler
 user names a variable, but set them first anyway: a user may map them later.
