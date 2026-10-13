@@ -122,8 +122,7 @@ def load_config(root: Path) -> Config:
     if not isinstance(schema_url, str):
         raise ConfigError("schema-url must be a string")
     icon = table.get("icon")
-    if icon is not None:
-        icon_svg = _read_icon(root, icon, "icon")
+    icon_svg = _read_icon(root, icon, "icon") if icon is not None else b""
     icons: dict[str, bytes] = {}
     for spec in specs:
         if spec.icon is not None and spec.icon not in icons:
@@ -131,7 +130,7 @@ def load_config(root: Path) -> Config:
     return Config(
         root=root,
         specs=tuple(specs),
-        icon_svg=icon_svg if icon is not None else b"",
+        icon_svg=icon_svg,
         schema_url=schema_url,
         reserved_topics=tuple(reserved),
         icons=icons,

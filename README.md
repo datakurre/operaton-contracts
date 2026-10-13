@@ -80,13 +80,17 @@ ${dryRun}    ${False}
 
 *** Tasks ***
 Process Records
+    VAR    ${result}=    ${None}    scope=${BPMN:TASK}
     ${input}=    Validate Task Input    ProcessRecordsInput
     Log    ${input}[recordIds]
     VAR    ${result}=    ${{{}}}    scope=${BPMN:TASK}
 ```
 
 `Validate Task Input` reads `${alias}` for every field, validates, and returns
-the values JSON-compatible (dates as `YYYY-MM-DD`), keyed by alias. Declare
+the values JSON-compatible (dates as `YYYY-MM-DD`), keyed by alias. Invalid
+input fails with `InvalidTaskInput`, so error boundary events can catch it.
+Set every output to `${None}` with task scope as the task's first step so
+Operaton evaluates output mappings even when a BPMN error is thrown. Declare
 typed suite defaults (`${False}`, `${0}`, `@{EMPTY}`): strict contracts reject
 the string `"0"` or `"false"`. The library imports the contracts module from
 `sys.path`, falling back to the running suite's directory.
@@ -146,10 +150,12 @@ exist only in the committed files.
 specs and `[tool.purjo.topics]` differ, when a topic is reserved or lacks
 `process-variables = false`, or when the suite defining a topic's task lacks a
 typed default for an input, the `Validate Task Input` call, or a
-`VAR … scope=${BPMN:TASK}` for an output. Names are matched the way Robot
-matches them, suites are collected recursively (skipping hidden directories,
-`tests/`, `lib/`, `examples/`, and `test_*.robot`), and a task name defined in
-more than one suite is an error.
+`VAR … scope=${BPMN:TASK}` for an output (a `${None}` placeholder does not
+count). Topics that only a kept template version uses are accepted, and must
+stay in `[tool.purjo.topics]` with `process-variables = false` and a defined
+task. Names are matched the way Robot matches them, suites are collected
+recursively (skipping hidden directories, `tests/`, `lib/`, `examples/`, and
+`test_*.robot`), and a task name defined in more than one suite is an error.
 
 ## Agent skill
 
